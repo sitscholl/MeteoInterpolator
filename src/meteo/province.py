@@ -37,8 +37,8 @@ class ProvinceAPI(BaseMeteoHandler):
     stations_url = base_url + "/stations"
     timeseries_url = base_url + "/timeseries"
 
-    def __init__(self, timezone: str, chunk_size_days: int = 365, **kwargs):
-        self.timezone = timezone
+    def __init__(self, chunk_size_days: int = 365, **kwargs):
+        self.timezone = "Europe/Rome"
         self.chunk_size_days = chunk_size_days
         self.station_codes = None
         self.station_sensors = {}
@@ -62,8 +62,11 @@ class ProvinceAPI(BaseMeteoHandler):
             return self.station_sensors.get(station_code)
 
         response = requests.get(self.sensors_url, params = {"station_code": station_code})
+        response.raise_for_status()
+
         sensors_list = set([i['TYPE'] for i in response.json()])
         self.station_sensors[station_code] = sensors_list
+
         return sensors_list
 
     def get_station_codes(self):
@@ -147,15 +150,26 @@ class ProvinceAPI(BaseMeteoHandler):
 
                     raw_responses.append(response_data)
                 except Exception as e:
-                    logger.error(f"Error fetching data for {sensor} for {query_start} - {query_end} with url {response.request.url}: {e}", exc_info = True)
+                    logger.error(f"Error fetching data for {sensor} for {query_start} - {query_end}: {e}", exc_info = True)
 
                 time.sleep(sleep_time)
 
-        return raw_responses
+        if len(raw_responses) > 0:
+            return pd.concat(raw_responses, ignore_index = True)
+        else:
+            logger.warning(f"No data could be fetched for station {station_id} and sensors {sensor_codes}")
+            return None
 
-    def transform(self, raw_data: list):
-        df_raw = pd.concat(raw_data, ignore_index = True)
-        df_pivot = df_raw.pivot(columns = "sensor", values = "VALUE", index = ["DATE", "station_id"]).reset_index()
+    def transform(self, raw_data: pd.DataFrame | None):
+
+        if raw_data is None:
+            return None
+
+        if raw_data[['DATE', 'station_id', 'sensor']].duplicated().any():
+            logger.warning("Found duplicates for ['DATE', 'station_id', 'sensor']. They will be dropped")
+            raw_data.drop_duplicates(subset = ['DATE', 'station_id', 'sensor'], inplace = True)
+        
+        df_pivot = raw_data.pivot(columns = "sensor", values = "VALUE", index = ["DATE", "station_id"]).reset_index()
         df_pivot.rename(columns = PROVINCE_RENAME, inplace = True)
 
         try:
@@ -190,7 +204,7 @@ if __name__ == '__main__':
     start = datetime.datetime(2025, 1, 14)
     end = datetime.datetime(2025, 1, 16)
 
-    pr_handler = ProvinceAPI(timezone = 'CET')
+    pr_handler = ProvinceAPI(timezone = 'Europe/Rome')
     print(pr_handler.get_station_info("86900MS"))
     data = pr_handler.get_data(
         station_id = '86900MS',
