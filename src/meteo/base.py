@@ -1,0 +1,96 @@
+from abc import ABC, abstractmethod
+import pandas as pd
+from typing import Any, Dict
+
+from ..validate.meteo import MeteoValidator
+
+class BaseMeteoHandler(ABC):
+    """
+    Abstract base class for meteorological data handlers.
+    
+    This class defines the interface for retrieving, processing, and validating
+    meteorological data from various sources.
+    """
+
+    @property
+    @abstractmethod
+    def freq(self):
+        """Return frequency string for datetime frequency of provider measurements"""
+        pass
+
+    @property
+    @abstractmethod
+    def inclusive(self):
+        """Return string indicating if query calls to the provider are left or right inclusive or both. Must be one of 'left', 'right' or 'both'."""
+        pass
+
+    @abstractmethod
+    def __enter__(self):
+        """Enter context management."""
+        return self
+
+    @abstractmethod
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Exit context management."""
+        pass
+
+    @abstractmethod
+    def get_station_info(self, station_id: str) -> Dict[str, Any]:
+        """
+        Query information for a given station from the source, 
+        such as elevation, latitude or longitude.
+
+        Args:
+            station_id (str): The unique identifier for the station.
+
+        Returns:
+            dict: A dictionary containing station information such as elevation, latitude, and longitude.
+        """
+        pass
+
+    @abstractmethod
+    def get_raw_data(self, **kwargs) -> pd.DataFrame:
+        """
+        Query the raw data from the source.
+        
+        Args:
+            **kwargs: Parameters for data retrieval
+            
+        Returns:
+            Any: Raw data from the source
+        """
+        pass
+
+    @abstractmethod
+    def transform(self, raw_data: Any) -> pd.DataFrame:
+        """
+        Transform the raw data into a standardized format.
+        
+        Args:
+            raw_data: Raw data to be transformed
+            
+        Returns:
+            pd.DataFrame: Transformed data in standardized format
+        """
+        pass
+
+    def get_data(self, validator: MeteoValidator, **kwargs) -> pd.DataFrame:
+        """
+        Run the complete data processing pipeline.
+        
+        This method orchestrates the entire process:
+        1. Get raw data
+        2. Transform it
+        3. Validate it
+        
+        Args:
+            **kwargs: Parameters for the pipeline
+            
+        Returns:
+            pd.DataFrame: Processed and validated data
+        """
+        raw_data = self.get_raw_data(**kwargs)
+        transformed_data = self.transform(raw_data)
+        validated_data = validator.validate(transformed_data)
+                    
+        return validated_data
