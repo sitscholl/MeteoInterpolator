@@ -1,4 +1,6 @@
 import pandas as pd
+import asyncio
+import httpx
 
 import datetime
 import requests
@@ -37,17 +39,34 @@ class ProvinceAPI(BaseMeteoHandler):
     stations_url = base_url + "/stations"
     timeseries_url = base_url + "/timeseries"
 
-    def __init__(self, chunk_size_days: int = 365, **kwargs):
+    def __init__(self, chunk_size_days: int = 365, timeout: int = 20, **kwargs):
         self.timezone = "Europe/Rome"
         self.chunk_size_days = chunk_size_days
-        self.station_codes = None
-        self.station_sensors = {}
+        self.timeout = timeout
 
-    def __enter__(self):
+        self.station_codes = None
+        self._station_codes_lock = asyncio.Lock()
+
+        self.station_sensors = {}
+        self._station_sensors_locks: dict[str, asyncio.Lock] = {}
+
+        self._client = None
+
+    async def __aenter__(self):
+        logger.info("Opening ProvinceAPI session...")
+        self._client = httpx.AsyncClient()
         return self
 
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        logger.info("Closing ProvinceAPI session...")
+        if self._client is not None:
+            await self._client.aclose()
+
+    def __enter__(self):
+        raise RuntimeError("Use 'async with ProvinceAPI()' for async context management.")
+
     def __exit__(self, exc_type, exc_value, traceback):
-        pass
+        raise RuntimeError("Use 'async with ProvinceAPI()' for async context management.")
 
     @property
     def freq(self):
@@ -57,31 +76,62 @@ class ProvinceAPI(BaseMeteoHandler):
     def inclusive(self):
         return "both"
 
-    def get_sensors_for_station(self, station_code: str):
+    async def get_sensors_for_station(self, station_code: str):
         if self.station_sensors.get(station_code) is not None:
             return self.station_sensors.get(station_code)
 
-        response = requests.get(self.sensors_url, params = {"station_code": station_code})
-        response.raise_for_status()
+        lock = self._station_sensors_locks.get(station_code)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._station_sensors_locks[station_code] = lock
 
-        sensors_list = set([i['TYPE'] for i in response.json()])
-        self.station_sensors[station_code] = sensors_list
+        async with lock:
+            if self.station_sensors.get(station_code) is not None:
+                return self.station_sensors.get(station_code)
 
-        return sensors_list
+            if self._client is None:
+                raise ValueError("Initialize client before querying sensors")
 
-    def get_station_codes(self):
+            response = await self._client.get(
+                    self.sensors_url, params = {"station_code": station_code},
+                    timeout=self.timeout
+                )
+            response.raise_for_status()
+
+            sensors_list = set([i['TYPE'] for i in response.json()])
+            self.station_sensors[station_code] = sensors_list
+
+            return sensors_list
+
+    async def get_station_codes(self):
         if self.station_codes is not None:
             return self.station_codes
+        
+        async with self._station_codes_lock:
 
-        response = requests.get(self.stations_url)
-        response.raise_for_status()
-        stations_list = set([i['properties']['SCODE'] for i in response.json()['features']])
-        self.station_codes = stations_list
-        return stations_list
+            if self.station_codes is not None:
+                return self.station_codes
 
-    def get_station_info(self, station_id: str) -> Dict[str, Any]:
+            if self._client is None:
+                raise ValueError("Initialize client before querying sensors")
 
-        response = requests.get(self.stations_url)
+            response = await self._client.get(
+                    self.stations_url, 
+                    timeout=self.timeout
+                )
+            response.raise_for_status()
+
+            stations_list = set([i['properties']['SCODE'] for i in response.json()['features']])
+            self.station_codes = stations_list
+
+            return self.station_codes
+
+    async def get_station_info(self, station_id: str) -> Dict[str, Any]:
+
+        response = await self._client.get(
+                self.stations_url, 
+                timeout=self.timeout
+            )
         response.raise_for_status()
 
         response_data = response.json()
@@ -99,7 +149,7 @@ class ProvinceAPI(BaseMeteoHandler):
             'name': station_props.get('NAME_D')
         }
 
-    def get_raw_data(
+    async def get_raw_data(
             self,            
             station_id: str,
             start: datetime.datetime,
@@ -110,21 +160,23 @@ class ProvinceAPI(BaseMeteoHandler):
             **kwargs
         ):
 
-        if station_id not in self.get_station_codes():
-            raise ValueError(f"Invalid station_id {station_id}. Choose one from {self.get_station_codes()}")
+        if station_id not in await self.get_station_codes():
+            raise ValueError(f"Invalid station_id {station_id}. Choose one from {await self.get_station_codes()}")
 
         start = start.astimezone(pytz.timezone(self.timezone))
         end = end.astimezone(pytz.timezone(self.timezone))
         
         dates_split = split_dates(start, end, freq = self.freq, n_days = self.chunk_size_days, split_on_year=split_on_year)
+        
+        all_sensors = await self.get_sensors_for_station(station_id)
         if sensor_codes is None:
-            sensor_codes = self.get_sensors_for_station(station_id)
+            sensor_codes = all_sensors
         else:
             if not isinstance(sensor_codes, list):
                 raise ValueError(f"Sensor_codes must be of type list. Got {type(sensor_codes)}")
             for sensor in sensor_codes:
-                if sensor not in self.get_sensors_for_station(station_id):
-                    raise ValueError(f"Invalid sensor {sensor}. Choose from: {self.get_sensors_for_station(station_id)}")
+                if sensor not in all_sensors:
+                    raise ValueError(f"Invalid sensor {sensor}. Choose from: {all_sensors}")
 
         raw_responses = []
         for query_start, query_end in dates_split:
@@ -204,7 +256,7 @@ if __name__ == '__main__':
     start = datetime.datetime(2025, 1, 14)
     end = datetime.datetime(2025, 1, 16)
 
-    pr_handler = ProvinceAPI(timezone = 'Europe/Rome')
+    pr_handler = ProvinceAPI()
     print(pr_handler.get_station_info("86900MS"))
     data = pr_handler.get_data(
         station_id = '86900MS',
