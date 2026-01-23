@@ -48,7 +48,11 @@ class ProvinceAPI(BaseMeteoHandler):
         self.timezone = "Europe/Rome"
         self.chunk_size_days = chunk_size_days
         self.timeout = timeout
-        self._semaphore = asyncio.Semaphore(max_concurrent_requests)
+
+        if max_concurrent_requests < 1:
+            raise ValueError(f"max concurrent requests should be greater than 0. Got {max_concurrent_requests}")
+
+        self.max_concurrent_requests = max_concurrent_requests
         self.sleep_time = sleep_time
 
         self.station_codes = None
@@ -173,12 +177,10 @@ class ProvinceAPI(BaseMeteoHandler):
                 "date_from": query_start.strftime("%Y%m%d%H%M"),
                 "date_to": query_end.strftime("%Y%m%d%H%M")
             }
-            async with self._semaphore:
-                response = await self._client.get(
-                        self.timeseries_url, params = data_params,
-                        timeout=self.timeout
-                    )
-                asyncio.sleep(self.sleep_time)
+            response = await self._client.get(
+                    self.timeseries_url, params = data_params,
+                    timeout=self.timeout
+                )
             response.raise_for_status()
 
             response_data = pd.DataFrame(response.json())
@@ -194,6 +196,26 @@ class ProvinceAPI(BaseMeteoHandler):
         except Exception as e:
             logger.error(f"Error fetching data for {sensor} for {query_start} - {query_end}: {e}", exc_info = True)
             return None
+        finally:
+            await asyncio.sleep(self.sleep_time)
+
+    async def _worker(self, queue: asyncio.Queue, results: list[pd.DataFrame | None]):
+        while True:
+            job = await queue.get()
+
+            if job is None:
+                queue.task_done()
+                break
+
+            station_id, date_range, sensor = job
+            try:
+                raw_data = await self._create_request_task(station_id, date_range, sensor)
+                if raw_data is not None:
+                    results.append(raw_data)
+            except Exception as e:
+                logger.error(f"Worker error for station {station_id} with sensor {sensor}: {e}", exc_info=True)
+            finally:
+                queue.task_done()
 
     async def get_raw_data(
             self,            
@@ -208,6 +230,7 @@ class ProvinceAPI(BaseMeteoHandler):
         if station_id not in await self.get_station_codes():
             raise ValueError(f"Invalid station_id {station_id}. Choose one from {await self.get_station_codes()}")
 
+        queue = asyncio.Queue(maxsize = self.max_concurrent_requests *2)
         start = start.astimezone(pytz.timezone(self.timezone))
         end = end.astimezone(pytz.timezone(self.timezone))
         
@@ -223,13 +246,27 @@ class ProvinceAPI(BaseMeteoHandler):
                 if sensor not in all_sensors:
                     raise ValueError(f"Invalid sensor {sensor}. Choose from: {all_sensors}")
 
-        request_tasks = []
+        # Start the workers
+        raw_responses = []
+        workers = [
+            asyncio.create_task(self._worker(queue, raw_responses))
+            for _ in range(self.max_concurrent_requests)
+            ]
+
+        # Put jobs in the queue
         for date_range in dates_split:
             for sensor in sensor_codes:
-                request_tasks.append(self._create_request_task(station_id, date_range, sensor))
+                await queue.put((station_id, date_range, sensor))
 
-        raw_responses = await asyncio.gather(*request_tasks)
-        raw_responses = [i for i in raw_responses if i is not None]
+        # Put the stop signal into the queue
+        for _ in workers:
+            await queue.put(None)
+
+        # Wait for all jobs to finish
+        await queue.join()
+
+        # Make sure all workers finish
+        await asyncio.gather(*workers)
 
         if len(raw_responses) > 0:
             return pd.concat(raw_responses, ignore_index = True)
