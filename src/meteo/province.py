@@ -113,7 +113,7 @@ class ProvinceAPI(BaseMeteoHandler):
                 return self.station_codes
 
             if self._client is None:
-                raise ValueError("Initialize client before querying sensors")
+                raise ValueError("Initialize client before querying station codes")
 
             response = await self._client.get(
                     self.stations_url, 
@@ -127,6 +127,8 @@ class ProvinceAPI(BaseMeteoHandler):
             return self.station_codes
 
     async def get_station_info(self, station_id: str) -> Dict[str, Any]:
+        if self._client is None:
+            raise ValueError("Initialize client before querying station info")
 
         response = await self._client.get(
                 self.stations_url, 
@@ -155,6 +157,7 @@ class ProvinceAPI(BaseMeteoHandler):
             start: datetime.datetime,
             end: datetime.datetime,
             sleep_time: int = 1,
+            max_concurrent_calls: int = 3,
             split_on_year = True,
             sensor_codes: list[str] | None = None,
             **kwargs
@@ -179,32 +182,37 @@ class ProvinceAPI(BaseMeteoHandler):
                     raise ValueError(f"Invalid sensor {sensor}. Choose from: {all_sensors}")
 
         raw_responses = []
-        for query_start, query_end in dates_split:
-            for sensor in sensor_codes:
-                try:
-                    data_params = {
-                        "station_code": station_id,
-                        "sensor_code": sensor,
-                        "date_from": query_start.strftime("%Y%m%d%H%M"),
-                        "date_to": query_end.strftime("%Y%m%d%H%M")
-                    }
-                    response = requests.get(self.timeseries_url, params = data_params)
-                    response.raise_for_status()
+        semaphore = asyncio.Semaphore(max_concurrent_calls)
+        async with semaphore:
+            for query_start, query_end in dates_split:
+                for sensor in sensor_codes:
+                    try:
+                        data_params = {
+                            "station_code": station_id,
+                            "sensor_code": sensor,
+                            "date_from": query_start.strftime("%Y%m%d%H%M"),
+                            "date_to": query_end.strftime("%Y%m%d%H%M")
+                        }
+                        response = await self._client.get(
+                                self.timeseries_url, params = data_params,
+                                timeout=self.timeout
+                            )
+                        response.raise_for_status()
 
-                    response_data = pd.DataFrame(response.json())
+                        response_data = pd.DataFrame(response.json())
 
-                    if len(response_data) == 0:
-                        logger.warning(f"No data found for {data_params}")
-                        continue
+                        if len(response_data) == 0:
+                            logger.warning(f"No data found for {data_params}")
+                            continue
 
-                    response_data['sensor'] = sensor
-                    response_data['station_id'] = station_id
+                        response_data['sensor'] = sensor
+                        response_data['station_id'] = station_id
 
-                    raw_responses.append(response_data)
-                except Exception as e:
-                    logger.error(f"Error fetching data for {sensor} for {query_start} - {query_end}: {e}", exc_info = True)
+                        raw_responses.append(response_data)
+                    except Exception as e:
+                        logger.error(f"Error fetching data for {sensor} for {query_start} - {query_end}: {e}", exc_info = True)
 
-                time.sleep(sleep_time)
+                    await asyncio.sleep(sleep_time)
 
         if len(raw_responses) > 0:
             return pd.concat(raw_responses, ignore_index = True)
