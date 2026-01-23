@@ -315,17 +315,30 @@ class ProvinceAPI(BaseMeteoHandler):
         return df_pivot
 
 if __name__ == '__main__':
+    
+    import logging
+    from ..validate.meteo import MeteoValidator
 
-    start = datetime.datetime(2025, 1, 14)
-    end = datetime.datetime(2025, 1, 16)
+    logging.basicConfig(level = logging.DEBUG, force = True)
 
-    pr_handler = ProvinceAPI()
-    print(pr_handler.get_station_info("86900MS"))
-    data = pr_handler.get_data(
-        station_id = '86900MS',
-        sensor_codes = ["LT"],
-        start = start,
-        end = end
-    )
+    async def run_test():
+        start = datetime.datetime(2026, 1, 14)
+        end = datetime.datetime(2026, 10, 21)
 
-    print(data)
+        pr_handler = ProvinceAPI()
+        async with pr_handler as meteo_handler:
+
+            st_info = await meteo_handler.get_station_info("86900MS")
+            print(st_info)
+
+            data = await meteo_handler.get_data(
+                station_id = '86900MS',
+                sensor_codes = ["LT", 'N', 'LF'],
+                start = start,
+                end = end,
+                validator = None
+            )
+        print(data)
+        return data
+
+    data = asyncio.run(run_test())
