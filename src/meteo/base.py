@@ -25,17 +25,17 @@ class BaseMeteoHandler(ABC):
         pass
 
     @abstractmethod
-    def __enter__(self):
-        """Enter context management."""
+    async def __aenter__(self):
+        """Enter async context management."""
         return self
 
     @abstractmethod
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Exit context management."""
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Exit async context management."""
         pass
 
     @abstractmethod
-    def get_station_info(self, station_id: str) -> Dict[str, Any]:
+    async def get_station_info(self, station_id: str) -> Dict[str, Any]:
         """
         Query information for a given station from the source, 
         such as elevation, latitude or longitude.
@@ -49,7 +49,7 @@ class BaseMeteoHandler(ABC):
         pass
 
     @abstractmethod
-    def get_raw_data(self, **kwargs) -> pd.DataFrame:
+    async def get_raw_data(self, **kwargs) -> pd.DataFrame:
         """
         Query the raw data from the source.
         
@@ -74,7 +74,7 @@ class BaseMeteoHandler(ABC):
         """
         pass
 
-    def get_data(self, validator: MeteoValidator, **kwargs) -> pd.DataFrame:
+    async def get_data(self, validator: MeteoValidator, **kwargs) -> pd.DataFrame:
         """
         Run the complete data processing pipeline.
         
@@ -89,8 +89,13 @@ class BaseMeteoHandler(ABC):
         Returns:
             pd.DataFrame: Processed and validated data
         """
-        raw_data = self.get_raw_data(**kwargs)
+        raw_data = await self.get_raw_data(**kwargs)
         transformed_data = self.transform(raw_data)
-        validated_data = validator.validate(transformed_data)
+
+        if transformed_data is None:
+            return None
+
+        if validator is not None:
+            transformed_data = validator.validate(transformed_data)
                     
-        return validated_data
+        return transformed_data
