@@ -336,7 +336,7 @@ if __name__ == '__main__':
                 sensor_codes = ["LT", 'N', 'LF'],
                 start = start,
                 end = end,
-                validator = None
+                validator = MeteoValidator()
             )
         print(data)
         return data
