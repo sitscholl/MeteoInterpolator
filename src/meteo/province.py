@@ -55,8 +55,8 @@ class ProvinceAPI(BaseMeteoHandler):
         self.max_concurrent_requests = max_concurrent_requests
         self.sleep_time = sleep_time
 
-        self.station_codes = None
-        self._station_codes_lock = asyncio.Lock()
+        self.station_info = None
+        self._station_info_lock = asyncio.Lock()
 
         self.station_sensors = {}
         self._station_sensors_locks: dict[str, asyncio.Lock] = {}
@@ -115,16 +115,25 @@ class ProvinceAPI(BaseMeteoHandler):
             return sensors_list
 
     async def get_station_codes(self):
-        if self.station_codes is not None:
-            return self.station_codes
+        if self.station_info is not None:
+            return list(self.station_info.keys())
+        else:
+            info = await self.get_station_info()
+            return list(info.keys())
         
-        async with self._station_codes_lock:
+    async def get_station_info(self, station_id: str | None = None) -> Dict[str, Any]:
+        if self.station_info is not None:
+            if station_id is not None:
+                return self.station_info.get(station_id, {})
+            return self.station_info
 
-            if self.station_codes is not None:
-                return self.station_codes
+        async with self._station_info_lock:
+
+            if self.station_info is not None:
+                return self.station_info
 
             if self._client is None:
-                raise ValueError("Initialize client before querying station codes")
+                raise ValueError("Initialize client before querying station info")
 
             response = await self._client.get(
                     self.stations_url, 
@@ -132,36 +141,28 @@ class ProvinceAPI(BaseMeteoHandler):
                 )
             response.raise_for_status()
 
-            stations_list = set([i['properties']['SCODE'] for i in response.json()['features']])
-            self.station_codes = stations_list
+            response_data = response.json()
 
-            return self.station_codes
+            if len(response_data['features']) == 0:
+                raise ValueError("Error retrieving station info. Response data contains no features")
 
-    async def get_station_info(self, station_id: str) -> Dict[str, Any]:
-        if self._client is None:
-            raise ValueError("Initialize client before querying station info")
+            info_dict = {}
+            for i in response_data['features']:
+                station_props = i['properties']
+                station_info = {
+                    'latitude': station_props.get('LAT'),
+                    'longitude': station_props.get('LONG'),
+                    'elevation': station_props.get('ALT'),
+                    'name': station_props.get('NAME_D')
+                }
+                info_dict[station_props['SCODE']] = station_info
 
-        response = await self._client.get(
-                self.stations_url, 
-                timeout=self.timeout
-            )
-        response.raise_for_status()
+            self.station_info = info_dict
 
-        response_data = response.json()
-        station_info = [i for i in response_data['features'] if i['properties']['SCODE'] == station_id]
-
-        if len(station_info) == 0 :
-            logger.warning(f"No metadata found for {station_id}")
-            return {}
+            if station_id is not None:
+                return self.station_info.get(station_id, {})
+            return self.station_info
         
-        station_props = station_info[0]['properties']
-        return {
-            'latitude': station_props.get('LAT'),
-            'longitude': station_props.get('LONG'),
-            'elevation': station_props.get('ALT'),
-            'name': station_props.get('NAME_D')
-        }
-
     async def _create_request_task(
         self, station_id: str, date_range: Tuple[datetime, datetime], sensor: str
         ):
