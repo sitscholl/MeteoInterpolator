@@ -4,7 +4,7 @@ import pandera.pandas as pa
 class MeteoValidator:
 
     def __init__(self, allow_additional_columns: bool = True):
-        self.allow_additional_columns = not allow_additional_columns
+        self.allow_additional_columns = allow_additional_columns
 
     @property
     def output_schema(self) -> pa.DataFrameSchema:
@@ -20,8 +20,8 @@ class MeteoValidator:
                 "precipitation": pa.Column(float, nullable=True, required = False),
                 "solar_radiation": pa.Column(float, nullable = True, required = False),
             },
-            index=pa.Index(int),
-            strict=self.allow_additional_columns
+            index = pa.Index(int),
+            strict= not self.allow_additional_columns
         )
 
     def validate(self, transformed_data: pd.DataFrame) -> pd.DataFrame:
