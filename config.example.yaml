@@ -1,5 +1,6 @@
 general:
   stations:
+  timezone: Europe/Rome
   start: "25-01-2026"
   end: "26-01-2026"
   parameters: tair_2m

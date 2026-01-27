@@ -51,8 +51,9 @@ class RuntimeContext:
             self.stations = list(stations)
         else:
             self.stations = [stations]
-        self.start = to_datetime(general_config['start'], dayfirst = True)
-        self.end = to_datetime(general_config['end'], dayfirst = True)
+        self.timezone = general_config['timezone']
+        self.start = self._localize_datetime(general_config['start'])
+        self.end = self._localize_datetime(general_config['end'])
         parameters = general_config['parameters']
         if isinstance(parameters, (list, tuple)):
             self.parameters = list(parameters)
@@ -132,6 +133,15 @@ class RuntimeContext:
             logger.info("No database configuration provided. Validation scores will not be persisted")
         else:
             logger.info(f"Initialized database connection at {db_config['path']}")
+
+    def _localize_datetime(self, value):
+        ts = to_datetime(value, dayfirst = True)
+        if ts.tzinfo is None:
+            try:
+                return ts.tz_localize(self.timezone)
+            except Exception:
+                return ts.tz_localize(self.timezone, ambiguous = False, nonexistent = "shift_forward")
+        return ts.tz_convert(self.timezone)
 
     def update_runtime(self, config_file: str | Path):
         self.config_file = Path(config_file)
