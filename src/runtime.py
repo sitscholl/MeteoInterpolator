@@ -59,10 +59,14 @@ class RuntimeContext:
         cv_config = config.get('cross_validation')
         cross_validator = CrossValidator(**cv_config) if cv_config is not None else None
 
+        ## Residual Model
+        residual_config = config.get('residual_model')
+        residual_model = ResidualModel(**residual_config) if residual_config is not None else None
+
         ## Interpolator
         self.interpolator = Interpolator(
             vertical_model = VerticalModel(**config['vertical_model']),
-            residual_model = ResidualModel(**config['residual_model']),
+            residual_model = residual_model,
             regions = interpolation_regions,
             cross_validator = cross_validator
         )
