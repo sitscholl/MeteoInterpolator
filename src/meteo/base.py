@@ -3,6 +3,7 @@ import inspect
 import pandas as pd
 from typing import Any, Dict
 
+from .station import Station
 from ..validate.meteo import MeteoValidator
 
 class BaseMeteoHandler(ABC):
@@ -61,7 +62,7 @@ class BaseMeteoHandler(ABC):
         pass
 
     @abstractmethod
-    async def get_station_info(self, station_id: str) -> Dict[str, Any]:
+    async def get_station_info(self, station_id: str | None) -> Dict[str, Any]:
         """
         Query information for a given station from the source, 
         such as elevation, latitude or longitude.
@@ -100,7 +101,7 @@ class BaseMeteoHandler(ABC):
         """
         pass
 
-    async def get_data(self, validator: MeteoValidator, **kwargs) -> pd.DataFrame:
+    async def get_data(self, validator: MeteoValidator, **kwargs) -> Station | None:
         """
         Run the complete data processing pipeline.
         
@@ -113,9 +114,9 @@ class BaseMeteoHandler(ABC):
             **kwargs: Parameters for the pipeline
             
         Returns:
-            pd.DataFrame: Processed and validated data
+            Station: A station object with validated data
         """
-        raw_data = await self.get_raw_data(**kwargs)
+        raw_data, metadata = await self.get_raw_data(**kwargs)
         transformed_data = self.transform(raw_data)
 
         if transformed_data is None:
@@ -124,4 +125,10 @@ class BaseMeteoHandler(ABC):
         if validator is not None:
             transformed_data = validator.validate(transformed_data)
                     
-        return transformed_data
+        return Station(
+            id = metadata.get('id'),
+            x = metadata.get('x'),
+            y = metadata.get('y'),
+            elevation = metadata.get('elevation'),
+            data = transformed_data
+        )

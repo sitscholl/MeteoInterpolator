@@ -154,10 +154,11 @@ class ProvinceAPI(BaseMeteoHandler):
             for i in response_data['features']:
                 station_props = i['properties']
                 station_info = {
-                    'latitude': station_props.get('LAT'),
-                    'longitude': station_props.get('LONG'),
+                    'y': station_props.get('LAT'),
+                    'x': station_props.get('LONG'),
                     'elevation': station_props.get('ALT'),
-                    'name': station_props.get('NAME_D')
+                    'name': station_props.get('NAME_D'),
+                    'id': station_props['SCODE']
                 }
                 info_dict[station_props['SCODE']] = station_info
 
@@ -273,11 +274,12 @@ class ProvinceAPI(BaseMeteoHandler):
         # Make sure all workers finish
         await asyncio.gather(*workers)
 
+        st_metadata = await self.get_station_info(station_id)
         if len(raw_responses) > 0:
-            return pd.concat(raw_responses, ignore_index = True)
+            return pd.concat(raw_responses, ignore_index = True), st_metadata
         else:
             logger.warning(f"No data could be fetched for station {station_id} and sensors {sensor_codes}")
-            return None
+            return None, st_metadata
 
     def transform(self, raw_data: pd.DataFrame | None):
 
