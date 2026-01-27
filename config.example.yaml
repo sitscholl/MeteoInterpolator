@@ -1,0 +1,17 @@
+base_grid:
+  path: "https://files.isimip.org/ISIMIP3a/InputData/climate/atmosphere/obsclim/global/daily/historical/CHELSA-W5E5/chelsa-w5e5_obsclim_orog_30arcsec_global.nc#mode=bytes"
+  var: orog
+  crs: 4326
+  target_crs: 32532
+
+aoi:
+  minx: 10
+  miny: 46
+  maxx: 12
+  maxy: 47
+
+meteo_input:
+  handler: province_api
+
+vertical_model:
+  fit_intercept: True
