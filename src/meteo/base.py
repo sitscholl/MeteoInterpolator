@@ -125,10 +125,12 @@ class BaseMeteoHandler(ABC):
         if validator is not None:
             transformed_data = validator.validate(transformed_data)
                     
-        return Station(
+        client = getattr(self, "_client", None)
+        return await Station.create(
             id = metadata.get('id'),
             x = metadata.get('x'),
             y = metadata.get('y'),
             elevation = metadata.get('elevation'),
-            data = transformed_data
+            data = transformed_data,
+            client = client
         )
