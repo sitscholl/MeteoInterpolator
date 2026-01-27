@@ -7,7 +7,7 @@ from .array.base_grid import BaseGrid
 from .meteo.base import BaseMeteoHandler
 from .datagaps import Gapfiller
 from .interpolate import Interpolator, VerticalModel, ResidualModel, InterpolationRegions, CrossValidator
-from .array import GridWriter
+from .array.writer import GridWriter
 from .database.db import InterpolationDB
 
 
