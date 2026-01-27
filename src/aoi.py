@@ -27,3 +27,7 @@ class AOI:
             raise ValueError("Data CRS has no EPSG code; cannot apply AOI")
         minx, miny, maxx, maxy = self._to_crs(dst_epsg)
         return data.rio.clip_box(minx=minx, miny=miny, maxx=maxx, maxy=maxy)
+
+    @property
+    def bounds(self):
+        return f"{self.minx}, {self.miny}, {self.maxx}, {self.maxy}"
