@@ -22,6 +22,8 @@ class BaseGrid:
         res: int | float | tuple[float, float] | None = None, 
         x_dim: str | None = None,
         y_dim: str | None = None,
+        x_dim_target: str = 'x',
+        y_dim_target: str = 'y',
         aoi: AOI | None = None,
         resampling_method: str | Resampling = 'bilinear',
         **kwargs
@@ -29,7 +31,7 @@ class BaseGrid:
         
         data = self.open(path, **kwargs)
 
-        data = self._normalize_spatial_dims(data, x_dim=x_dim, y_dim=y_dim)
+        data = self._normalize_spatial_dims(data, x_dim=x_dim, y_dim=y_dim, x_dim_target = x_dim_target, y_dim_target = y_dim_target)
 
         needs_reprojection = False
         if crs is not None:
@@ -75,6 +77,8 @@ class BaseGrid:
             data = aoi.filter_bbox(data)
 
         self.data = data
+        self.x_dim = x_dim_target
+        self.y_dim = y_dim_target
 
     def open(self, path, var: str | None = None, squeeze: bool = True):
         data = xr.open_dataset(path)
@@ -112,9 +116,16 @@ class BaseGrid:
     def _normalize_spatial_dims(
         self,
         data: xr.DataArray | xr.Dataset,
+        x_dim_target: str, 
+        y_dim_target: str,
         x_dim: str | None = None,
         y_dim: str | None = None,
     ) -> xr.DataArray | xr.Dataset:
+        if not x_dim_target or not y_dim_target:
+            raise ValueError("x_dim_target and y_dim_target must be non-empty strings.")
+        if x_dim_target == y_dim_target:
+            raise ValueError("x_dim_target and y_dim_target must be different.")
+
         if x_dim is None:
             x_dim_name = self._find_dim_name(data, _POSSIBLE_X_DIM_NAMES + [n.upper() for n in _POSSIBLE_X_DIM_NAMES])
         else:
@@ -130,13 +141,22 @@ class BaseGrid:
             y_dim_name = y_dim
 
         rename_map = {}
-        if x_dim_name != "x":
-            rename_map[x_dim_name] = "x"
-        if y_dim_name != "y":
-            rename_map[y_dim_name] = "y"
+        if x_dim_name != x_dim_target:
+            rename_map[x_dim_name] = x_dim_target
+        if y_dim_name != y_dim_target:
+            rename_map[y_dim_name] = y_dim_target
+        if len(set(rename_map.values())) != len(rename_map.values()):
+            raise ValueError(
+                f"Cannot rename dims {rename_map} because multiple source dims map to the same target."
+            )
+        for src, tgt in rename_map.items():
+            if tgt in data.dims and tgt not in rename_map:
+                raise ValueError(
+                    f"Cannot rename dim '{src}' to '{tgt}' because '{tgt}' already exists in the dataset."
+                )
         if rename_map:
             data = data.rename(rename_map)
 
         # Ensure rioxarray knows which dims are spatial after renaming.
-        data = data.rio.set_spatial_dims(x_dim="x", y_dim="y", inplace=False)
+        data = data.rio.set_spatial_dims(x_dim=x_dim_target, y_dim=y_dim_target, inplace=False)
         return data
