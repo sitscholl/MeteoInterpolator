@@ -2,6 +2,8 @@ from pathlib import Path
 from dataclasses import dataclass
 import yaml
 
+import logging
+
 from .aoi import AOI
 from .array.base_grid import BaseGrid
 from .meteo.base import BaseMeteoHandler
@@ -10,6 +12,7 @@ from .interpolate import Interpolator, VerticalModel, ResidualModel, Interpolati
 from .array.writer import GridWriter
 from .database.db import InterpolationDB
 
+logger = logging.getLogger(__name__)
 
 def load_config_file(config_file: str | Path) -> dict:
     config_path = Path(config_file)
@@ -38,34 +41,57 @@ class RuntimeContext:
 
     def initialize_runtime(self, config: dict):
         aoi = AOI(**config['aoi'])
+        logger.info(f'Initialized aoi with bounds {aoi.bounds}')
 
         ## Base Grid
         self.base_grid = BaseGrid(**config['base_grid'], aoi = aoi)
+        logger.info(f"Initialized Base grid {self.base_grid}")
 
         ## Meteo Loader
         handler_config = dict(config['meteo_input'])
         handler_name = handler_config.pop('handler')
         self.meteo_loader = BaseMeteoHandler.create(handler_name, **handler_config)
+        logger.info(f'Initialized {handler_name} meteo loader')
 
         ## Gapfiller
         gapfiller_config = config.get('gapfilling')
         self.gapfiller = Gapfiller(**gapfiller_config) if gapfiller_config is not None else None
+        if gapfiller_config is None:
+            logger.info('No gapfiller configuration provided. Gaps will not be filled')
+        else:
+            logger.info("Gapfiller initialized")
 
         ## Interpolation Regions
         region_config = config.get('interpolation_regions')
         interpolation_regions = InterpolationRegions(**region_config) if region_config is not None else None
+        if region_config is None:
+            logger.info("No interpolation regions specified.")
+        else:
+            logger.info('Interpolation regions initialized')
 
         ## Cross validation
         cv_config = config.get('cross_validation')
         cross_validator = CrossValidator(**cv_config) if cv_config is not None else None
+        if cv_config is None:
+            logger.info('No cross validation configuration provided. Cross validation will be skipped')
+        else:
+            logger.info('Cross validator initialized.')
+
+        ## Vertical Model
+        vertical_model = VerticalModel(**config.get('vertical_model', {}))
+        logger.info("Vertical model initialized")
 
         ## Residual Model
         residual_config = config.get('residual_model')
         residual_model = ResidualModel(**residual_config) if residual_config is not None else None
+        if residual_config is None:
+            logger.info("No residual model configuration provided. Residuals will not be interpolated")
+        else:
+            logger.info('Residual Model initialized')
 
         ## Interpolator
         self.interpolator = Interpolator(
-            vertical_model = VerticalModel(**config['vertical_model']),
+            vertical_model = vertical_model,
             residual_model = residual_model,
             regions = interpolation_regions,
             cross_validator = cross_validator
@@ -74,12 +100,24 @@ class RuntimeContext:
         ## Grid Writer
         output_config = config.get('output')
         self.grid_writer = GridWriter(**output_config) if output_config is not None else None
+        if output_config is None:
+            logger.info("No output configuration provided. Results will not be saved")
+        else:
+            logger.info(f"Initialized grid writer pointing to {output_config['path']}")
 
         ## Database
         db_config = config.get('database')
         self.db = InterpolationDB(**db_config) if db_config is not None else None
+        if db_config is None:
+            logger.info("No database configuration provided. Validation scores will not be persisted")
+        else:
+            logger.info(f"Initialized database connection at {db_config['path']}")
 
     def update_runtime(self, config_file: str | Path):
         self.config_file = Path(config_file)
         self.config = load_config_file(self.config_file)
         self.initialize_runtime(self.config)
+
+if __name__ == '__main__':
+    logging.basicConfig(level = logging.DEBUG, force = True)
+    runtime = RuntimeContext.from_config_file('config.example.yaml')
