@@ -6,7 +6,7 @@ import math
 
 import logging
 
-from .aoi import AOI
+from ..aoi import AOI
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +18,13 @@ class BaseGrid:
     def __init__(
         self, 
         path: str | Path, 
+        target_crs: int | None = None,
+        target_res: int | float | tuple[float, float] | None = None, 
+        target_x_dim: str = 'x',
+        target_y_dim: str = 'y',
         crs: int | None = None, 
-        res: int | float | tuple[float, float] | None = None, 
         x_dim: str | None = None,
         y_dim: str | None = None,
-        x_dim_target: str = 'x',
-        y_dim_target: str = 'y',
         aoi: AOI | None = None,
         resampling_method: str | Resampling = 'bilinear',
         **kwargs
@@ -31,54 +32,63 @@ class BaseGrid:
         
         data = self.open(path, **kwargs)
 
-        data = self._normalize_spatial_dims(data, x_dim=x_dim, y_dim=y_dim, x_dim_target = x_dim_target, y_dim_target = y_dim_target)
+        data = self._normalize_spatial_dims(data, x_dim=x_dim, y_dim=y_dim, x_dim_target = target_x_dim, y_dim_target = target_y_dim)
 
         needs_reprojection = False
-        if crs is not None:
-            if data.rio.crs is None:
-                logger.warning(f"Original crs could not be loaded when opening {path}. Setting crs to {crs}")
-                data = data.rio.write_crs(crs)
-            elif data.rio.crs.to_epsg() != crs:
-                needs_reprojection = True
+        original_crs_obj = data.rio.crs
+        if crs is None and original_crs_obj is None:
+            raise ValueError(
+                "Dataset crs could not be loaded when opening file. Please provide crs manually in config via crs key."
+            )
+        if original_crs_obj is None:
+            original_crs = crs
+            data = data.rio.write_crs(original_crs)
         else:
-            if data.rio.crs is None:
-                raise ValueError(f"Original crs could not be loaded when opening {path} and crs has not been specified.")
-            crs = data.rio.crs.to_epsg()
-        self.crs = crs
+            original_crs = original_crs_obj.to_epsg()
+            if crs is not None and original_crs != crs:
+                logger.warning(
+                    f"Provided crs does not correspond to dataset crs and will be ignored. {crs} vs {original_crs}"
+                )
+
+        if target_crs is None:
+            target_crs = original_crs
+        elif original_crs != target_crs:
+            needs_reprojection = True
 
         original_res_x, original_res_y = data.rio.resolution()
         original_res = (abs(original_res_x), abs(original_res_y))
-        if res is not None:
-            if isinstance(res, (int, float)):
-                target_res = (float(res), float(res))
+        if target_res is not None:
+            if isinstance(target_res, (int, float)):
+                target_res = (float(target_res), float(target_res))
             else:
-                if len(res) != 2:
-                    raise ValueError("res must be a scalar or a 2-tuple (x_res, y_res).")
-                target_res = (float(res[0]), float(res[1]))
+                if len(target_res) != 2:
+                    raise ValueError("target_res must be a scalar or a 2-tuple (x_res, y_res).")
+                target_res = (float(target_res[0]), float(target_res[1]))
             if not (math.isclose(original_res[0], abs(target_res[0])) and math.isclose(original_res[1], abs(target_res[1]))):
                 needs_reprojection = True
-        else:
-            target_res = original_res
 
-        if needs_reprojection:
-            if data.rio.crs.to_epsg() != crs:
-                logger.debug(f"Reprojecting base grid from crs {data.rio.crs} to {crs}")
-            if original_res != target_res:
-                logger.debug(f"Reprojecting base grid from resolution of {original_res} to {target_res}")
-            if isinstance(resampling_method, str):
-                try:
-                    resampling_method = Resampling[resampling_method.upper()]
-                except KeyError as exc:
-                    valid_methods = ", ".join(r.name.lower() for r in Resampling)
-                    raise ValueError(f"Unknown resampling_method '{resampling_method}'. Valid options: {valid_methods}") from exc
-            data = data.rio.reproject(dst_crs = crs, resolution = target_res, resampling = resampling_method)
-
+        # Filter before reprojecting
         if aoi is not None:
             data = aoi.filter_bbox(data)
 
+        if needs_reprojection:
+            if data.rio.crs.to_epsg() != target_crs:
+                logger.debug(f"Reprojecting base grid from crs {data.rio.crs} to {target_crs}")
+            if target_res is not None and original_res != target_res:
+                logger.debug(f"Reprojecting base grid from resolution of {original_res} to {target_res}")
+            if isinstance(resampling_method, str):
+                try:
+                    resampling_method = Resampling[resampling_method.lower()]
+                except KeyError as exc:
+                    valid_methods = ", ".join(r.name.lower() for r in Resampling)
+                    raise ValueError(f"Unknown resampling_method '{resampling_method}'. Valid options: {valid_methods}") from exc
+            data = data.rio.reproject(dst_crs = target_crs, resolution = target_res, resampling = resampling_method)
+
         self.data = data
-        self.x_dim = x_dim_target
-        self.y_dim = y_dim_target
+        self.crs = target_crs
+        self.res = target_res if target_res is not None else original_res
+        self.x_dim = target_x_dim
+        self.y_dim = target_y_dim
 
     def open(self, path, var: str | None = None, squeeze: bool = True):
         data = xr.open_dataset(path)
@@ -160,3 +170,6 @@ class BaseGrid:
         # Ensure rioxarray knows which dims are spatial after renaming.
         data = data.rio.set_spatial_dims(x_dim=x_dim_target, y_dim=y_dim_target, inplace=False)
         return data
+
+    def __repr__(self):
+        return f"BaseGrid (crs: {self.crs}, resolution: {self.res}, shape: {self.data.shape}, dims = {self.data.dims})"
