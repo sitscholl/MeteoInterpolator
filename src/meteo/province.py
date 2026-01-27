@@ -79,6 +79,10 @@ class ProvinceAPI(BaseMeteoHandler):
     def __exit__(self, exc_type, exc_value, traceback):
         raise RuntimeError("Use 'async with ProvinceAPI()' for async context management.")
 
+    @classmethod
+    def name(cls):
+        return "province_api"
+
     @property
     def freq(self):
         return "10min"
