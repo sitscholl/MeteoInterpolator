@@ -43,7 +43,9 @@ class RuntimeContext:
         self.base_grid = BaseGrid(**config['base_grid'], aoi = aoi)
 
         ## Meteo Loader
-        self.meteo_loader = BaseMeteoHandler(**config['meteo_input']).get_handler()
+        handler_config = dict(config['meteo_input'])
+        handler_name = handler_config.pop('handler')
+        self.meteo_loader = BaseMeteoHandler.create(handler_name, **handler_config)
 
         ## Gapfiller
         gapfiller_config = config.get('gapfilling')
