@@ -1,6 +1,7 @@
 from pathlib import Path
 from dataclasses import dataclass
 import yaml
+from pandas import to_datetime
 
 import logging
 
@@ -40,11 +41,30 @@ class RuntimeContext:
         self.initialize_runtime(self.config)
 
     def initialize_runtime(self, config: dict):
-        aoi = AOI(**config['aoi'])
-        logger.info(f'Initialized aoi with bounds {aoi.bounds}')
+
+        ## General
+        general_config = config['general']
+        stations = general_config.get('stations')
+        if stations is None:
+            self.stations = None
+        elif isinstance(stations, (list, tuple)):
+            self.stations = list(stations)
+        else:
+            self.stations = [stations]
+        self.start = to_datetime(general_config['start'], dayfirst = True)
+        self.end = to_datetime(general_config['end'], dayfirst = True)
+        parameters = general_config['parameters']
+        if isinstance(parameters, (list, tuple)):
+            self.parameters = list(parameters)
+        else:
+            self.parameters = [parameters]
+        logger.info(f"Start initializing runtime context. General settings: Start = {self.start}, End = {self.end}, Parameters = {self.parameters}")
+
+        self.aoi = AOI(**config['aoi'])
+        logger.info(f'Initialized aoi with bounds {self.aoi.bounds}')
 
         ## Base Grid
-        self.base_grid = BaseGrid(**config['base_grid'], aoi = aoi)
+        self.base_grid = BaseGrid(**config['base_grid'], aoi = self.aoi)
         logger.info(f"Initialized Base grid {self.base_grid}")
 
         ## Meteo Loader
