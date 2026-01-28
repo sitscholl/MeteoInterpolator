@@ -31,21 +31,22 @@ class InterpolationWorkflow:
         else:
             stations = self.context.stations
         
-        ##TODO: Pass config options to MeteoValidator?
-        ##TODO: Transform station_data list into a MeteoData object?
-        station_data = []
+        logger.info(f"Requesting data for {len(stations)} stations.")
         async with self.context.meteo_loader as meteo_loader:
-            for st in stations:
-                _station = await meteo_loader.get_data(
-                    station_id = st, 
-                    start = self.context.start, 
-                    end = self.context.end, 
-                    sensor_codes = self.context.parameters, 
-                    validator = MeteoValidator()
-                    )
-                if _station is not None:
-                    station_data.append(_station)
+            async def load_station(st: str):
+                async with asyncio.Semaphore(3):
+                    return await meteo_loader.get_data(
+                        station_id = st, 
+                        start = self.context.start, 
+                        end = self.context.end, 
+                        sensor_codes = self.context.parameters, 
+                        validator = MeteoValidator()
+                        )
+            tasks = [asyncio.create_task(load_station(st)) for st in stations]
+            station_data = await asyncio.gather(*tasks)
 
+        ##TODO: Transform station_data list into a MeteoData object?
+        station_data = [i for i in station_data if i is not None]
         if len(station_data) == 0:
             raise ValueError("Could not load data for any station.")
         logger.info(f"Loaded data for {len(station_data)} stations.")
