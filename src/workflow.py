@@ -35,8 +35,9 @@ class InterpolationWorkflow:
         
         logger.info(f"Requesting data for {len(stations)} stations.")
         async with self.context.meteo_loader as meteo_loader:
+            semaphore = asyncio.Semaphore(3)
             async def load_station(st: str):
-                async with asyncio.Semaphore(3):
+                async with semaphore:
                     return await meteo_loader.get_data(
                         station_id = st, 
                         start = self.context.start, 
