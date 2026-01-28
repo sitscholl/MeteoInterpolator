@@ -60,6 +60,13 @@ class MeteoData:
         for lst,nam in zip([self.ids, self.coords], ['ids', 'coords']):
             self._assert_unique(lst, name = nam)
 
+        for tbl in self.data:
+            if "datetime" in tbl.columns:
+                tbl["datetime"] = pd.to_datetime(tbl["datetime"], utc = True)
+
+    def __repr__(self):
+        return "MeteoData"
+
     @classmethod
     def from_list(cls, lst: list[Station | None]):
         stations = [st for st in lst if st is not None]
@@ -105,7 +112,7 @@ class MeteoData:
         if parameter is None:
             raise ValueError("Parameter cannot be None")
 
-        ts = pd.to_datetime(timestamp)
+        ts = pd.to_datetime(timestamp, utc = True)
         values = []
         elevations = []
 
@@ -117,16 +124,7 @@ class MeteoData:
             if "datetime" not in tbl.columns:
                 raise ValueError(f"Missing 'datetime' column in station data. Got columns: {list(tbl.columns)}")
 
-            dt_series = tbl["datetime"]
-            if pd.api.types.is_datetime64tz_dtype(dt_series):
-                if ts.tzinfo is None:
-                    ts_cmp = ts.tz_localize(dt_series.dt.tz)
-                else:
-                    ts_cmp = ts.tz_convert(dt_series.dt.tz)
-            else:
-                ts_cmp = ts.tz_localize(None) if ts.tzinfo is not None else ts
-
-            row = tbl.loc[dt_series == ts_cmp, parameter]
+            row = tbl.loc[tbl["datetime"] == ts, parameter]
             if row.empty:
                 continue
             row = row.dropna()
@@ -150,3 +148,13 @@ class MeteoData:
             return None
         station_idx = self.ids.index(station_id)
         return self.data[station_idx]
+
+    def iter_samples(self, start, end, params: list[str], freq: str = 'D'):
+
+        if isinstance(params, str):
+            params = [params]
+
+        for interp_date in pd.date_range(start, end, freq = freq):
+            for param in params:
+                X, y = self.get_xy_data(param, interp_date)
+                yield (param, interp_date, X, y)
