@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import logging
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Callable
 
 import httpx
 import numpy as np
@@ -89,30 +89,23 @@ class MeteoData:
         if len(lst) != len(set(lst)):
             raise ValueError(f"Found duplicated elements for attribute {name} in MeteoData.")
 
-    def get_parameter_data(self, parameter_names: list[str], idx_cols = ['datetime', 'station_id']):
-        if isinstance(parameter_names, str):
-            parameter_names = [parameter_names]
-
-        parameter_list = []
-        for tbl in self.data:
-            _params = [i for i in parameter_names if i in tbl.columns]
-            if len(_params) == 0:
-                continue
-            if not all([i in tbl.columns for i in idx_cols]):
-                raise ValueError(f"Not all idx_cols found in table: Got {tbl.columns}")
-            parameter_list.append(tbl[idx_cols + _params])
-
-        if len(parameter_list) > 0:
-            return pd.concat(parameter_list, ignore_index = True).set_index(idx_cols)
+    def get_xy_data(self, parameter: str, timestamp, res = 'daily', **kwargs) -> tuple[np.ndarray, np.ndarray]:
+        if res == 'daily':
+            X, y = self._get_xy_data_daily(parameter = parameter, date = timestamp, **kwargs)
         else:
-            logger.warning(f"Could find no stations with data for {parameter_names}")
-            return None
+            raise NotImplementedError(f"Resolution {res} not implemented. Choose one of ['daily']")
+        return X, y
 
-    def get_xy_data(self, parameter: str, timestamp) -> tuple[np.ndarray, np.ndarray]:
+    def _get_xy_data_daily(
+        self,
+        parameter: str,
+        date,
+        agg: str | Callable = "mean",
+    ) -> tuple[np.ndarray, np.ndarray]:
         if parameter is None:
             raise ValueError("Parameter cannot be None")
 
-        ts = pd.to_datetime(timestamp, utc = True)
+        day = pd.to_datetime(date, utc = True).normalize()
         values = []
         elevations = []
 
@@ -124,18 +117,26 @@ class MeteoData:
             if "datetime" not in tbl.columns:
                 raise ValueError(f"Missing 'datetime' column in station data. Got columns: {list(tbl.columns)}")
 
-            row = tbl.loc[tbl["datetime"] == ts, parameter]
-            if row.empty:
-                continue
-            row = row.dropna()
-            if row.empty:
+            mask = tbl["datetime"].dt.normalize() == day
+            series = tbl.loc[mask, parameter].dropna()
+            if series.empty:
                 continue
 
-            values.append(row.mean())
+            if callable(agg):
+                val = agg(series)
+            else:
+                if not hasattr(series, agg):
+                    raise ValueError(f"Unknown aggregation '{agg}' for daily data.")
+                val = getattr(series, agg)()
+
+            if pd.isna(val):
+                continue
+
+            values.append(val)
             elevations.append(elev)
 
         if len(values) == 0:
-            logger.warning(f"No data found for parameter '{parameter}' at {ts}")
+            logger.warning(f"No data found for parameter '{parameter}' on {day.date()}")
             return np.array([]), np.array([])
 
         X = np.asarray(values, dtype=float).reshape(-1, 1)
@@ -149,12 +150,16 @@ class MeteoData:
         station_idx = self.ids.index(station_id)
         return self.data[station_idx]
 
-    def iter_samples(self, start, end, params: list[str], freq: str = 'D'):
+    def iter_samples(self, start, end, params: list[str], res = 'daily', agg = 'mean'):
 
+        if res != 'daily':
+            raise NotImplementedError("Only daily resolution has been implemented so far.")
+
+        freq = 'D'
         if isinstance(params, str):
             params = [params]
 
         for interp_date in pd.date_range(start, end, freq = freq):
             for param in params:
-                X, y = self.get_xy_data(param, interp_date)
+                X, y = self.get_xy_data(param, interp_date, res = res, agg = agg)
                 yield (param, interp_date, X, y)

@@ -53,23 +53,23 @@ class InterpolationWorkflow:
             raise ValueError("Could not load data for any station.")
         logger.info(f"Loaded data for {meteo_data.n_stations} stations.")
 
+        ## TODO: Impement SpatialAggregator class to aggregate measurements to target freq
+
         if self.context.gapfiller is not None:
             meteo_data = self.context.gapfiller.fill_gaps(meteo_data)
 
-        for interp_date in pd.date_range(self.context.start, self.context.end, freq = 'D'):
-            for param in ["tair_2m"]:
-                logger.info(f'Starting interpolation for param {param} on {interp_date}')
+        for param, interp_date, X, y in meteo_data.iter_samples(self.context.start, self.context.end, ['tair_2m']):
+            logger.info(f'Starting interpolation for param {param} on {interp_date}')
 
-                X, y = meteo_data.get_xy_data(parameter = param, timestamp = interp_date)
-                interpolated_grid, cv_results = self.context.interpolator.interpolate(
-                    X, y, target_grid = self.context.base_grid
-                    )
+            interpolated_grid, cv_results = self.context.interpolator.interpolate(
+                X, y, target_grid = self.context.base_grid
+                )
 
-                if self.context.grid_writer is not None:
-                    self.context.grid_writer.write(interpolated_grid)
+            if self.context.grid_writer is not None:
+                self.context.grid_writer.write(interpolated_grid)
 
-                if self.context.db is not None:
-                    self.context.db.store_cv_results(cv_results, workflow_id = self.id, timestamp = self.timestamp)
+            if self.context.db is not None:
+                self.context.db.store_cv_results(cv_results, workflow_id = self.id, timestamp = self.timestamp)
 
 if __name__ == '__main__':
 
