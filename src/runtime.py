@@ -54,7 +54,7 @@ class RuntimeContext:
         self.timezone = general_config['timezone']
         self.start = self._localize_datetime(general_config['start'])
         self.end = self._localize_datetime(general_config['end'])
-        parameters = general_config['parameters']
+        parameters = ['LT'] #hardcoded for now, make dynamic later when adding more parameters
         if isinstance(parameters, (list, tuple)):
             self.parameters = list(parameters)
         else:

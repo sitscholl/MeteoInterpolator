@@ -3,7 +3,6 @@ general:
   timezone: Europe/Rome
   start: "25-01-2026"
   end: "26-01-2026"
-  parameters: LT
 
 base_grid:
   path: "https://files.isimip.org/ISIMIP3a/InputData/climate/atmosphere/obsclim/global/daily/historical/CHELSA-W5E5/chelsa-w5e5_obsclim_orog_30arcsec_global.nc#mode=bytes"
