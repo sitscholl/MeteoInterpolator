@@ -22,10 +22,6 @@ class InterpolationWorkflow:
         pass
 
     async def run(self):
-        logger.info("="*50)
-        logger.info('Starting Interpolation Workflow')
-        logger.info("="*50)
-
         self.timestamp = datetime.now()
         self._validate_context()
 
@@ -47,7 +43,11 @@ class InterpolationWorkflow:
                     sensor_codes = self.context.parameters, 
                     validator = MeteoValidator()
                     )
-                station_data.append(_station)
+                if _station is not None:
+                    station_data.append(_station)
+
+        if len(station_data) == 0:
+            raise ValueError("Could not load data for any station.")
         logger.info(f"Loaded data for {len(station_data)} stations.")
 
         if self.context.gapfiller is not None:
@@ -61,10 +61,6 @@ class InterpolationWorkflow:
         if self.context.db is not None:
             self.context.db.store_cv_results(cv_results, workflow_id = self.id, timestamp = self.timestamp)
 
-        logger.info("="*50)
-        logger.info('Finished Interpolation Workflow')
-        logger.info("="*50)
-
 if __name__ == '__main__':
 
     logging.basicConfig(level = logging.DEBUG, force = True)
@@ -74,4 +70,12 @@ if __name__ == '__main__':
         workflow = InterpolationWorkflow(runtime)
         await workflow.run()
 
+    logger.info("="*50)
+    logger.info('Starting Interpolation Workflow')
+    logger.info("="*50)
+
     asyncio.run(test_workflow())
+
+    logger.info("="*50)
+    logger.info('Finished Interpolation Workflow')
+    logger.info("="*50)
