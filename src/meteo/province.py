@@ -167,6 +167,23 @@ class ProvinceAPI(BaseMeteoHandler):
             if station_id is not None:
                 return self.station_info.get(station_id, {})
             return self.station_info
+
+    def _normalize_sensor_codes(self, sensor_codes: object) -> list[str]:
+        if isinstance(sensor_codes, str):
+            sensor_codes = [sensor_codes]
+        if not isinstance(sensor_codes, list):
+            raise ValueError(f"Sensor_codes must be of type list. Got {type(sensor_codes)}")
+        normalized = []
+        seen = set()
+        for s in sensor_codes:
+            if not isinstance(s, str):
+                raise ValueError(f"Sensor code must be str. Got {type(s)}")
+            s = s.strip()
+            if not s or s in seen:
+                continue
+            seen.add(s)
+            normalized.append(s)
+        return normalized
         
     async def _create_request_task(
         self, station_id: str, date_range: Tuple[datetime, datetime], sensor: str
@@ -230,27 +247,48 @@ class ProvinceAPI(BaseMeteoHandler):
             end: datetime.datetime,
             split_on_year = True,
             sensor_codes: list[str] | None = None,
+            warn_for_sensors: bool = True,
             **kwargs
         ):
 
-        if station_id not in await self.get_station_codes():
-            raise ValueError(f"Invalid station_id {station_id}. Choose one from {await self.get_station_codes()}")
+        available_station_codes = await self.get_station_codes()
+        if station_id not in available_station_codes:
+            raise ValueError(f"Invalid station_id {station_id}. Choose one from {available_station_codes}")
+
+        
+        st_metadata = await self.get_station_info(station_id)
+        all_sensors = await self.get_sensors_for_station(station_id)
+        if all_sensors is None or len(all_sensors) == 0:
+            logger.warning(f"No sensors available for station {station_id}. Cannot fetch data")
+            return None, st_metadata
+
+        if sensor_codes is None:
+            sensor_codes = sorted(all_sensors)
+        else:
+            sensor_codes = self._normalize_sensor_codes(sensor_codes)
+
+        available_sensors = [i for i in sensor_codes if i in all_sensors]
+        if len(available_sensors) == 0:
+            if warn_for_sensors:
+                logger.warning(f"None of the requested sensors are available for station {station_id}. Skipping")
+            else:
+                logger.debug(f"None of the requested sensors are available for station {station_id}. Skipping")
+            return None, st_metadata
+        
+        missing_sensors = [i for i in sensor_codes if i not in all_sensors]
+        if len(missing_sensors) > 0:
+            if warn_for_sensors:
+                logger.warning(f'The following sensors are not available for station {station_id}. They will be ignored: {missing_sensors}')
+            else:
+                logger.debug(f'The following sensors are not available for station {station_id}. They will be ignored: {missing_sensors}')
+
+        sensor_codes = available_sensors
 
         queue = asyncio.Queue(maxsize = self.max_concurrent_requests *2)
         start = start.astimezone(pytz.timezone(self.timezone))
         end = end.astimezone(pytz.timezone(self.timezone))
         
         dates_split = split_dates(start, end, freq = self.freq, n_days = self.chunk_size_days, split_on_year=split_on_year)
-        
-        all_sensors = await self.get_sensors_for_station(station_id)
-        if sensor_codes is None:
-            sensor_codes = all_sensors
-        else:
-            if not isinstance(sensor_codes, list):
-                raise ValueError(f"Sensor_codes must be of type list. Got {type(sensor_codes)}")
-            for sensor in sensor_codes:
-                if sensor not in all_sensors:
-                    raise ValueError(f"Invalid sensor {sensor}. Choose from: {all_sensors}")
 
         # Start the workers
         raw_responses = []
@@ -274,7 +312,6 @@ class ProvinceAPI(BaseMeteoHandler):
         # Make sure all workers finish
         await asyncio.gather(*workers)
 
-        st_metadata = await self.get_station_info(station_id)
         if len(raw_responses) > 0:
             return pd.concat(raw_responses, ignore_index = True), st_metadata
         else:
