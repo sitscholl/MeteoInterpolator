@@ -51,9 +51,11 @@ class RuntimeContext:
             self.stations = list(stations)
         else:
             self.stations = [stations]
+            
         self.timezone = general_config['timezone']
         self.start = self._localize_datetime(general_config['start'])
         self.end = self._localize_datetime(general_config['end'])
+       
         parameters = ['LT'] #hardcoded for now, make dynamic later when adding more parameters
         if isinstance(parameters, (list, tuple)):
             self.parameters = list(parameters)
@@ -138,10 +140,12 @@ class RuntimeContext:
         ts = to_datetime(value, dayfirst = True)
         if ts.tzinfo is None:
             try:
-                return ts.tz_localize(self.timezone)
+                ts = ts.tz_localize(self.timezone)
             except Exception:
-                return ts.tz_localize(self.timezone, ambiguous = False, nonexistent = "shift_forward")
-        return ts.tz_convert(self.timezone)
+                ts = ts.tz_localize(self.timezone, ambiguous = False, nonexistent = "shift_forward")
+        else:
+            ts = ts.tz_convert(self.timezone)
+        return ts.tz_convert("UTC")
 
     def update_runtime(self, config_file: str | Path):
         self.config_file = Path(config_file)
