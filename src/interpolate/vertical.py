@@ -30,6 +30,10 @@ class VerticalModel:
             return self._model.predict(X_2d).reshape(X.shape)
         if X.ndim == 2 and X.shape[1] == 1:
             return self._model.predict(X).reshape(X.shape)
+        if X.ndim == 2:
+            # Treat 2D arrays as spatial grids (y, x) with a single feature.
+            X_2d = X.reshape(-1, 1)
+            return self._model.predict(X_2d).reshape(X.shape)
         if X.ndim >= 2 and X.shape[-1] == 1:
             X_2d = X.reshape(-1, 1)
             return self._model.predict(X_2d).reshape(X.shape)
