@@ -51,8 +51,11 @@ class InterpolationWorkflow:
         meteo_data = MeteoData.from_list(station_data)
         if meteo_data.n_stations == 0:
             raise ValueError("Could not load data for any station.")
-        logger.info(f"Loaded data for {meteo_data.n_stations} stations.")
 
+        if meteo_data.n_stations < 3:
+            raise ValueError(f"Model fitting requires at least 3 stations. Got {meteo_data.nstations}")
+        logger.info(f"Loaded data for {meteo_data.n_stations} stations.")
+        
         ## TODO: Impement SpatialAggregator class to aggregate measurements to target freq
 
         if self.context.gapfiller is not None:
