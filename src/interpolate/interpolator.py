@@ -16,6 +16,11 @@ class Interpolator:
     cross_validator: CrossValidator | None = None
 
     def interpolate(self, X: np.ndarray, y: np.ndarray, target_grid: np.ndarray | xr.DataArray):
+        if self.cross_validator is not None:
+            raise NotImplementedError("Cross Validation has not been implemented yet")
+        else:
+            cv_results = None     
+        
         vertical_fit = self.vertical_model.fit(X, y)
         vertical_preds = vertical_fit.predict(target_grid)
 
@@ -25,4 +30,4 @@ class Interpolator:
             # residual_fit = self.residual_model.fit(residuals, coords)
             # residual_preds = residual_fit.predict(target_grid)
 
-        return vertical_preds
+        return vertical_preds, cv_results
