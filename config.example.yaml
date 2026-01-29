@@ -1,14 +1,16 @@
 general:
-  stations:
+  stations: ["19300MS", '69900MS', '09700MS', '82200MS']
   timezone: Europe/Rome
   start: "25-01-2026"
   end: "26-01-2026"
+  parameters: ["tair_2m"]
 
 base_grid:
   path: "https://files.isimip.org/ISIMIP3a/InputData/climate/atmosphere/obsclim/global/daily/historical/CHELSA-W5E5/chelsa-w5e5_obsclim_orog_30arcsec_global.nc#mode=bytes"
   var: orog
   crs: 4326
   target_crs: 32532
+  aoi_buffer_m: 5000
 
 aoi:
   minx: 10

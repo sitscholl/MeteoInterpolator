@@ -26,6 +26,7 @@ class BaseGrid:
         x_dim: str | None = None,
         y_dim: str | None = None,
         aoi: AOI | None = None,
+        aoi_buffer_m: int | float | None = None,
         resampling_method: str | Resampling = 'bilinear',
         **kwargs
         ):
@@ -69,7 +70,10 @@ class BaseGrid:
 
         # Filter before reprojecting
         if aoi is not None:
-            data = aoi.filter_bbox(data)
+            if needs_reprojection:
+                data = aoi.filter_bbox(data, buffer_m=aoi_buffer_m)
+            else:
+                data = aoi.filter_bbox(data)
 
         if needs_reprojection:
             if data.rio.crs.to_epsg() != target_crs:
@@ -83,6 +87,11 @@ class BaseGrid:
                     valid_methods = ", ".join(r.name.lower() for r in Resampling)
                     raise ValueError(f"Unknown resampling_method '{resampling_method}'. Valid options: {valid_methods}") from exc
             data = data.rio.reproject(dst_crs = target_crs, resolution = target_res, resampling = resampling_method)
+            if aoi is not None:
+                data = aoi.filter_bbox(data)
+
+        if data.isnull().any().item():
+            raise ValueError('BaseGrid cannot contain NaN values. Check reprojection and aoi settings. Set higher value for aoi_buffer_m?')
 
         self.data = data
         self.crs = target_crs
