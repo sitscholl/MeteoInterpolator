@@ -55,7 +55,8 @@ class InterpolationWorkflow:
         if meteo_data.n_stations < 3:
             raise ValueError(f"Model fitting requires at least 3 stations. Got {meteo_data.nstations}")
         logger.info(f"Loaded data for {meteo_data.n_stations} stations.")
-        
+
+        ## TODO: Check if any/all stations are within AOI, otherwise raise/warn
         ## TODO: Impement SpatialAggregator class to aggregate measurements to target freq
 
         if self.context.gapfiller is not None:
@@ -65,7 +66,7 @@ class InterpolationWorkflow:
             logger.info(f'Starting interpolation for param {param} on {interp_date}')
 
             interpolated_grid, cv_results = self.context.interpolator.interpolate(
-                X, y, target_grid = self.context.base_grid
+                X, y, target_grid = self.context.base_grid.data
                 )
 
             if self.context.grid_writer is not None:
