@@ -8,25 +8,10 @@ from typing import Dict, Any, Tuple
 import logging
 
 from .base import BaseMeteoHandler
+from .sensors import SENSORS
 from ..utils import split_dates
 
 logger = logging.getLogger(__name__)
-
-PROVINCE_RENAME = {
-    "DATE": "datetime",
-    "LT": "tair_2m",
-    "LF": "relative_humidity",
-    "N": "precipitation",
-    "WG": "wind_speed",
-    "WR": "wind_direction",
-    "WG.BOE": "wind_gust",
-    "LD.RED": "air_pressure",
-    "SD": "sun_duration",
-    "GS": "solar_radiation",
-    "HS": "snow_height",
-    "W": "water_level",
-    "Q": "discharge"
-}
 
 class ProvinceAPI(BaseMeteoHandler):
 
@@ -266,6 +251,7 @@ class ProvinceAPI(BaseMeteoHandler):
             sensor_codes = sorted(all_sensors)
         else:
             sensor_codes = self._normalize_sensor_codes(sensor_codes)
+            sensor_codes = SENSORS.resolve_provider_codes(self.provider_name, sensor_codes)
 
         available_sensors = [i for i in sensor_codes if i in all_sensors]
         if len(available_sensors) == 0:
@@ -328,7 +314,7 @@ class ProvinceAPI(BaseMeteoHandler):
             raw_data.drop_duplicates(subset = ['DATE', 'station_id', 'sensor'], inplace = True)
         
         df_pivot = raw_data.pivot(columns = "sensor", values = "VALUE", index = ["DATE", "station_id"]).reset_index()
-        df_pivot.rename(columns = PROVINCE_RENAME, inplace = True)
+        df_pivot.rename(columns = SENSORS.rename_map(self.provider_name), inplace = True)
 
         try:
             # 1. Capture whether it was Summer Time (CEST) before stripping

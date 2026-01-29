@@ -56,7 +56,7 @@ class RuntimeContext:
         self.start = self._localize_datetime(general_config['start'])
         self.end = self._localize_datetime(general_config['end'])
        
-        parameters = ['LT'] #hardcoded for now, make dynamic later when adding more parameters
+        parameters = general_config.get('parameters', ['tair_2m'])
         if isinstance(parameters, (list, tuple)):
             self.parameters = list(parameters)
         else:
