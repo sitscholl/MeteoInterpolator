@@ -139,8 +139,8 @@ class MeteoData:
             logger.warning(f"No data found for parameter '{parameter}' on {day.date()}")
             return np.array([]), np.array([])
 
-        X = np.asarray(values, dtype=float).reshape(-1, 1)
-        y = np.asarray(elevations, dtype=float)
+        y = np.asarray(values, dtype=float)
+        X = np.asarray(elevations, dtype=float).reshape(-1, 1)
         return X, y
 
     def get_station_data(self, station_id: str):
