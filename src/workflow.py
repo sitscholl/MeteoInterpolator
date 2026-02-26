@@ -53,10 +53,14 @@ class InterpolationWorkflow:
             raise ValueError("Could not load data for any station.")
 
         if meteo_data.n_stations < 3:
-            raise ValueError(f"Model fitting requires at least 3 stations. Got {meteo_data.nstations}")
+            raise ValueError(f"Model fitting requires at least 3 stations. Got {meteo_data.n_stations}")
         logger.info(f"Loaded data for {meteo_data.n_stations} stations.")
 
-        ## TODO: Check if any/all stations are within AOI, otherwise raise/warn
+        ## Check if any stations are within AOI, otherwise raise
+        stations_within_aoi = self.context.aoi.filter_bbox(meteo_data.to_geodataframe())
+        if self.context.require_stations_in_aoi and len(stations_within_aoi) == 0:
+            raise ValueError("No stations are within defined bounds.")
+
         ## TODO: Impement SpatialAggregator class to aggregate measurements to target freq
 
         if self.context.gapfiller is not None:
