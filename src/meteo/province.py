@@ -242,6 +242,8 @@ class ProvinceAPI(BaseMeteoHandler):
 
         
         st_metadata = await self.get_station_info(station_id)
+        st_metadata['crs'] = 4326
+        
         all_sensors = await self.get_sensors_for_station(station_id)
         if all_sensors is None or len(all_sensors) == 0:
             logger.warning(f"No sensors available for station {station_id}. Cannot fetch data")

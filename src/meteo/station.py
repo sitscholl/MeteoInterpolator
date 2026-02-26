@@ -15,23 +15,37 @@ class Station:
     id: str
     x: float
     y: float
+    crs: int
     elevation: Optional[float]
     data: pd.DataFrame
 
     def __post_init__(self):
+
+        if self.id is None:
+            raise ValueError("Station id cannot be None.")
+        if self.x is None:
+            raise ValueError("Station x-coordinate cannot be None.")
+        if self.y is None:
+            raise ValueError("Station y-coordinate cannot be None.")
+        if self.crs is None:
+            raise ValueError("Station crs cannot be None.")
+
+        if self.crs != 4326:
+            raise NotImplementedError(f"Station crs is {self.crs}. Only 4326 is implemented for now. Make sure the MeteoHandler returns coordinates in this crs.")
+
         if -90 > self.y or self.y > 90:
             raise ValueError("Latitude must be between -90 and 90")
         if -180 > self.x or self.x > 180:
             raise ValueError("Longitude must be between -180 and 180")
 
     @classmethod
-    async def create(cls, id, x, y, data, elevation: Optional[float] = None, client: Optional[httpx.AsyncClient] = None):
+    async def create(cls, id, x, y, data, crs, elevation: Optional[float] = None, client: Optional[httpx.AsyncClient] = None):
         if elevation is None:
             try:
                 elevation = await cls.fetch_elevation(x, y, client=client)
             except Exception as e:
                 logger.warning(f"Fetching elevation for station {id} failed with error: {e}")
-        return cls(id = id, x = x, y = y, elevation = elevation, data = data)
+        return cls(id = id, x = x, y = y, crs = crs, elevation = elevation, data = data)
 
     @staticmethod
     async def fetch_elevation(x: float, y: float, client: Optional[httpx.AsyncClient] = None) -> float:
@@ -53,11 +67,22 @@ class MeteoData:
     ids: list[str]
     coords: list[Tuple[float, float]]
     elevation: list[float]
+    crs: int
     data: list[pd.DataFrame]
 
     def __post_init__(self):
         if not len(self.ids) == len(self.coords) == len(self.elevation) == len(self.data):
             raise ValueError("Length mismatch in MeteoData. Make sure all attributes have the same number of elements")
+
+        if self.n_stations > 0:
+            if self.crs is None:
+                raise ValueError("MeteoData crs cannot be None when stations are present.")
+            if self.crs != 4326:
+                raise NotImplementedError(
+                    f"MeteoData crs is {self.crs}. Only 4326 is implemented for now."
+                )
+        elif self.crs is None:
+            self.crs = 4326
 
         for lst,nam in zip([self.ids, self.coords], ['ids', 'coords']):
             self._assert_unique(lst, name = nam)
@@ -72,11 +97,19 @@ class MeteoData:
     @classmethod
     def from_list(cls, lst: list[Station | None]):
         stations = [st for st in lst if st is not None]
+        if len(stations) == 0:
+            return cls(ids=[], coords=[], elevation=[], data=[], crs=4326)
+
         ids = [str(st.id) for st in stations]
         coords = [(st.x, st.y) for st in stations]
         elevation = [st.elevation for st in stations]
         data = [st.data for st in stations]
-        return cls(ids=ids, coords=coords, elevation=elevation, data=data)
+        
+        crs = set([st.crs for st in stations])
+        if len(crs) > 1:
+            raise ValueError(f"Cannot construct MeteoData from stations with different coordinate systems. Got {crs}")
+
+        return cls(ids=ids, coords=coords, elevation=elevation, data=data, crs=list(crs)[0])
 
     @property
     def n_stations(self):
@@ -94,7 +127,7 @@ class MeteoData:
     def to_geodataframe(self):
         return gpd.GeoDataFrame(
             {'id': self.ids, "geometry": [Point(x[0], x[1]) for x in self.coords]},
-            crs = 4326
+            crs = self.crs
         )
 
     def get_xy_data(self, parameter: str, timestamp, res = 'daily', **kwargs) -> tuple[np.ndarray, np.ndarray]:
