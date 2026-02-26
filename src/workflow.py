@@ -11,6 +11,11 @@ from .meteo.station import MeteoData
 
 logger = logging.getLogger(__name__)
 
+##Fixed parameters for now, make configurable later
+_PARAM_LIST = ['tair_2m']
+_FREQ = 'D'
+_MIN_SAMPLE_SIZE = 10
+
 class InterpolationWorkflow:
 
     def __init__(self, runtime_context: RuntimeContext):
@@ -61,12 +66,18 @@ class InterpolationWorkflow:
         if self.context.require_stations_in_aoi and len(stations_within_aoi) == 0:
             raise ValueError("No stations are within defined bounds.")
 
-        ## TODO: Impement SpatialAggregator class to aggregate measurements to target freq
-
         if self.context.gapfiller is not None:
             meteo_data = self.context.gapfiller.fill_gaps(meteo_data)
 
-        for param, interp_date, X, y in meteo_data.iter_samples(self.context.start, self.context.end, ['tair_2m']):
+        meteo_data = self.context.resampler.resample_meteo_data(
+            meteo_data,
+            freq=_FREQ,
+            min_sample_size=_MIN_SAMPLE_SIZE
+        )
+
+        for param, interp_date, X, y in meteo_data.iter_samples(
+            self.context.start, self.context.end, _PARAM_LIST, freq=_FREQ
+        ):
             logger.info(f'Starting interpolation for param {param} on {interp_date}')
 
             interpolated_grid, cv_results = self.context.interpolator.interpolate(

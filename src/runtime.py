@@ -8,6 +8,7 @@ import logging
 from .aoi import AOI
 from .array.base_grid import BaseGrid
 from .meteo.base import BaseMeteoHandler
+from .resample import MeteoResampler
 from .datagaps import Gapfiller
 from .interpolate import Interpolator, VerticalModel, ResidualModel, InterpolationRegions, CrossValidator
 from .array.writer import GridWriter
@@ -76,6 +77,10 @@ class RuntimeContext:
         handler_name = handler_config.pop('handler')
         self.meteo_loader = BaseMeteoHandler.create(handler_name, **handler_config)
         logger.info(f'Initialized {handler_name} meteo loader')
+
+        ## Meteo resampler
+        resampler_config = config.get('resampling', {})
+        self.resampler = MeteoResampler(**resampler_config)
 
         ## Gapfiller
         gapfiller_config = config.get('gapfilling')

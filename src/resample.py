@@ -3,6 +3,8 @@ import pandas as pd
 import logging
 from typing import Callable, Any, Iterable
 
+from .meteo.station import MeteoData
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_RESAMPLE_COLMAP: dict[str, str | list[str]] = {
@@ -28,11 +30,13 @@ class MeteoResampler:
     def __init__(
         self,
         resample_colmap: dict[str, str | Callable | list[str | Callable] | tuple[str | Callable, ...]] | None = None,
+        default_aggfunc: str | Callable = 'mean'
     ):
 
         self.resample_colmap = (
             resample_colmap.copy() if resample_colmap is not None else DEFAULT_RESAMPLE_COLMAP.copy()
         )
+        self.default_aggfunc = default_aggfunc
 
     def _resolve_aggfunc(self, aggfunc: str | Callable):
         if callable(aggfunc):
@@ -95,7 +99,6 @@ class MeteoResampler:
         self,
         data: pd.DataFrame,
         freq: str,
-        default_aggfunc: str | Callable | None = "mean",
         datetime_col: str = "datetime",
         groupby_cols: list[str] | None = None,
         min_sample_size: int = 1,
@@ -121,7 +124,7 @@ class MeteoResampler:
 
         # 3. Build Named Aggregations
         value_cols = [c for c in df.columns if c not in required_cols]
-        named_aggs = self._prepare_named_aggs(value_cols, default_aggfunc)
+        named_aggs = self._prepare_named_aggs(value_cols, self.default_aggfunc)
 
         if not named_aggs:
             return df[required_cols].drop_duplicates().sort_values(by=[datetime_col] + groupby_cols)
@@ -145,7 +148,51 @@ class MeteoResampler:
         
         # Ensure column order matches groupby_cols + datetime + values
         final_cols = groupby_cols + [datetime_col] + list(named_aggs.keys())
-        return resampled[final_cols].sort_values(by=[datetime_col] + groupby_cols)
+        resampled_prepared = resampled[final_cols].sort_values(by=[datetime_col] + groupby_cols)
+        
+        if 'tair_2m_mean' in resampled_prepared.columns:
+            resampled_prepared = resampled_prepared.rename(columns = {'tair_2m_mean': 'tair_2m'})
+
+        return resampled_prepared
+
+    def resample_meteo_data(
+        self,
+        meteo_data: MeteoData,
+        freq: str,
+        datetime_col: str = "datetime",
+        groupby_cols: list[str] | None = None,
+        min_sample_size: int = 1,
+    ) -> MeteoData:
+
+        if not isinstance(meteo_data, MeteoData):
+            raise TypeError(f"Expected MeteoData. Got {type(meteo_data)}")
+
+        if meteo_data.n_stations == 0:
+            return meteo_data
+
+        resampled_tables: list[pd.DataFrame] = []
+
+        for tbl in meteo_data.data:
+            if tbl is None or tbl.empty:
+                resampled_tables.append(tbl.copy() if tbl is not None else tbl)
+                continue
+
+            resampled = self.apply_resampling(
+                tbl,
+                freq=freq,
+                datetime_col=datetime_col,
+                groupby_cols=groupby_cols,
+                min_sample_size=min_sample_size,
+            )
+            resampled_tables.append(resampled)
+
+        return MeteoData(
+            ids=meteo_data.ids,
+            coords=meteo_data.coords,
+            elevation=meteo_data.elevation,
+            data=resampled_tables,
+            crs=meteo_data.crs,
+        )
 
 
 if __name__ == "__main__":
