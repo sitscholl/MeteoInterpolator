@@ -1,7 +1,6 @@
 from uuid import uuid4
 from datetime import datetime
 import asyncio
-import pandas as pd
 
 import logging
 
@@ -72,7 +71,9 @@ class InterpolationWorkflow:
         meteo_data = self.context.resampler.resample_meteo_data(
             meteo_data,
             freq=_FREQ,
-            min_sample_size=_MIN_SAMPLE_SIZE
+            min_sample_size=_MIN_SAMPLE_SIZE,
+            datetime_col = 'datetime',
+            groupby_cols = ['station_id']
         )
 
         for param, interp_date, X, y in meteo_data.iter_samples(

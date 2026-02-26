@@ -130,6 +130,26 @@ class MeteoData:
             crs = self.crs
         )
 
+    def to_dataframe(self, include_coords: bool = False) -> pd.DataFrame:
+        frames: list[pd.DataFrame] = []
+        for station_id, (x, y), elev, tbl in zip(self.ids, self.coords, self.elevation, self.data):
+            if tbl is None or tbl.empty:
+                continue
+            df = tbl.copy()
+            df["station_id"] = station_id
+            df["elevation"] = elev
+            if include_coords:
+                df["x"] = x
+                df["y"] = y
+            if "datetime" in df.columns:
+                df["datetime"] = pd.to_datetime(df["datetime"], utc=True)
+            frames.append(df)
+
+        if len(frames) == 0:
+            return pd.DataFrame()
+
+        return pd.concat(frames, ignore_index=True)
+
     def get_station_data(self, station_id: str):
         if station_id not in self.ids:
             logger.warning(f"No data available for station {station_id}")
@@ -141,38 +161,29 @@ class MeteoData:
         if isinstance(params, str):
             params = [params]
 
-        for interp_date in pd.date_range(start, end, freq = freq):
+        df = self.to_dataframe()
+        if df.empty:
+            return
+        if "datetime" not in df.columns:
+            raise ValueError("Missing 'datetime' column in MeteoData dataframes.")
+
+        start_ts = pd.to_datetime(start, utc=True)
+        end_ts = pd.to_datetime(end, utc=True)
+        df = df[(df["datetime"] >= start_ts) & (df["datetime"] <= end_ts)]
+
+        for interp_date in pd.date_range(start_ts, end_ts, freq=freq):
+            ts = pd.to_datetime(interp_date, utc=True)
+            subset = df[df["datetime"] == ts]
             for param in params:
-                values = []
-                elevations = []
-
-                ts = pd.to_datetime(interp_date, utc=True)
-
-                for elev, tbl in zip(self.elevation, self.data):
-                    if elev is None:
-                        continue
-                    if param not in tbl.columns:
-                        continue
-                    if "datetime" not in tbl.columns:
-                        raise ValueError(
-                            f"Missing 'datetime' column in station data. Got columns: {list(tbl.columns)}"
-                        )
-
-                    series = tbl.loc[tbl["datetime"] == ts, param].dropna()
-                    if series.empty:
-                        continue
-                    val = series.iloc[0]
-                    if pd.isna(val):
-                        continue
-
-                    values.append(val)
-                    elevations.append(elev)
-
-                if len(values) == 0:
+                if param not in subset.columns:
+                    continue
+                series = subset[param].dropna()
+                if series.empty:
                     logger.warning(f"No data found for parameter '{param}' on {ts.date()}")
                     yield (param, interp_date, np.array([]), np.array([]))
                     continue
 
-                y = np.asarray(values, dtype=float)
-                X = np.asarray(elevations, dtype=float).reshape(-1, 1)
+                y = series.to_numpy(dtype=float)
+                elevations = subset.loc[series.index, "elevation"].to_numpy(dtype=float)
+                X = elevations.reshape(-1, 1)
                 yield (param, interp_date, X, y)
