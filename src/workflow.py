@@ -5,7 +5,6 @@ import asyncio
 import logging
 
 from .runtime import RuntimeContext
-from .validate.meteo import MeteoValidator
 from .meteo.station import MeteoData
 
 logger = logging.getLogger(__name__)
@@ -13,7 +12,7 @@ logger = logging.getLogger(__name__)
 ##Fixed parameters for now, make configurable later
 _PARAM_LIST = ['tair_2m']
 _FREQ = 'D'
-_MIN_SAMPLE_SIZE = 10
+_MIN_SAMPLE_SIZE = 60
 
 class InterpolationWorkflow:
 
@@ -47,7 +46,7 @@ class InterpolationWorkflow:
                         start = self.context.start, 
                         end = self.context.end, 
                         sensor_codes = self.context.parameters, 
-                        validator = MeteoValidator()
+                        validator = self.context.meteo_validator
                         )
             tasks = [asyncio.create_task(load_station(st)) for st in stations]
             station_data = await asyncio.gather(*tasks)
