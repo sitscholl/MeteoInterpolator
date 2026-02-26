@@ -180,7 +180,6 @@ class MeteoData:
                 series = subset[param].dropna()
                 if series.empty:
                     logger.warning(f"No data found for parameter '{param}' on {ts.date()}")
-                    yield (param, interp_date, np.array([]), np.array([]))
                     continue
 
                 y = series.to_numpy(dtype=float)
