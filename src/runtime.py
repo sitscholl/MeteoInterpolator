@@ -9,6 +9,7 @@ from .aoi import AOI
 from .array.base_grid import BaseGrid
 from .meteo.base import BaseMeteoHandler
 from .resample import MeteoResampler
+from .validate.meteo import MeteoValidator
 from .datagaps import Gapfiller
 from .interpolate import Interpolator, VerticalModel, ResidualModel, InterpolationRegions, CrossValidator
 from .array.writer import GridWriter
@@ -75,12 +76,15 @@ class RuntimeContext:
         ## Meteo Loader
         handler_config = dict(config['meteo_input'])
         handler_name = handler_config.pop('handler')
-        self.meteo_loader = BaseMeteoHandler.create(handler_name, **handler_config)
+        self.meteo_loader = BaseMeteoHandler.create(handler_name, target_timezone = self.timezone, **handler_config)
         logger.info(f'Initialized {handler_name} meteo loader')
 
         ## Meteo resampler
         resampler_config = config.get('resampling', {})
         self.resampler = MeteoResampler(**resampler_config)
+
+        ## Meteo Validator
+        self.meteo_validator = MeteoValidator(timezone = self.timezone)
 
         ## Gapfiller
         gapfiller_config = config.get('gapfilling')
@@ -151,7 +155,7 @@ class RuntimeContext:
                 ts = ts.tz_localize(self.timezone, ambiguous = False, nonexistent = "shift_forward")
         else:
             ts = ts.tz_convert(self.timezone)
-        return ts.tz_convert("UTC")
+        return ts
 
     def update_runtime(self, config_file: str | Path):
         self.config_file = Path(config_file)

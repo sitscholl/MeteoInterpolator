@@ -3,7 +3,8 @@ import pandera.pandas as pa
 
 class MeteoValidator:
 
-    def __init__(self, allow_additional_columns: bool = True):
+    def __init__(self, timezone: str = 'UTC', allow_additional_columns: bool = True):
+        self.timezone = timezone
         self.allow_additional_columns = allow_additional_columns
 
     @property
@@ -13,7 +14,7 @@ class MeteoValidator:
         """
         return pa.DataFrameSchema(
             {
-                "datetime": pa.Column(pd.DatetimeTZDtype(tz="UTC"), coerce=True),
+                "datetime": pa.Column(pd.DatetimeTZDtype(tz=self.timezone), coerce=True),
                 "station_id": pa.Column(str),
 
                 "tair_2m": pa.Column(float, nullable=True, required = False),

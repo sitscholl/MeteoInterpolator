@@ -89,7 +89,7 @@ class MeteoData:
 
         for tbl in self.data:
             if "datetime" in tbl.columns:
-                tbl["datetime"] = pd.to_datetime(tbl["datetime"], utc = True)
+                tbl["datetime"] = pd.to_datetime(tbl["datetime"])
 
     def __repr__(self):
         return "MeteoData"
@@ -142,7 +142,7 @@ class MeteoData:
                 df["x"] = x
                 df["y"] = y
             if "datetime" in df.columns:
-                df["datetime"] = pd.to_datetime(df["datetime"], utc=True)
+                df["datetime"] = pd.to_datetime(df["datetime"])
             frames.append(df)
 
         if len(frames) == 0:
@@ -167,12 +167,12 @@ class MeteoData:
         if "datetime" not in df.columns:
             raise ValueError("Missing 'datetime' column in MeteoData dataframes.")
 
-        start_ts = pd.to_datetime(start, utc=True)
-        end_ts = pd.to_datetime(end, utc=True)
+        start_ts = pd.to_datetime(start)
+        end_ts = pd.to_datetime(end)
         df = df[(df["datetime"] >= start_ts) & (df["datetime"] <= end_ts)]
 
         for interp_date in pd.date_range(start_ts, end_ts, freq=freq):
-            ts = pd.to_datetime(interp_date, utc=True)
+            ts = pd.to_datetime(interp_date)
             subset = df[df["datetime"] == ts]
             for param in params:
                 if param not in subset.columns:

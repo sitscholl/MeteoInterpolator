@@ -24,6 +24,7 @@ class ProvinceAPI(BaseMeteoHandler):
 
     def __init__(
             self, 
+            target_timezone: str = 'UTC',
             chunk_size_days: int = 365, 
             timeout: int = 20, 
             max_concurrent_requests: int = 5,
@@ -31,6 +32,7 @@ class ProvinceAPI(BaseMeteoHandler):
             **kwargs
         ):
         self.timezone = "Europe/Rome"
+        self.target_timezone = target_timezone
         self.chunk_size_days = chunk_size_days
         self.timeout = timeout
 
@@ -334,7 +336,7 @@ class ProvinceAPI(BaseMeteoHandler):
                 self.timezone, 
                 ambiguous=is_dst,
                 nonexistent='shift_forward' # handle the spring "gap" too
-            ).dt.tz_convert('UTC')
+            ).dt.tz_convert(self.target_timezone)
 
             df_pivot['datetime'] = df_pivot['datetime'].dt.floor(self.freq)
         except Exception as e:
