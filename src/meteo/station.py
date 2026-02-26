@@ -171,7 +171,7 @@ class MeteoData:
         end_ts = pd.to_datetime(end)
         df = df[(df["datetime"] >= start_ts) & (df["datetime"] <= end_ts)]
 
-        for interp_date in pd.date_range(start_ts, end_ts, freq=freq):
+        for interp_date in pd.date_range(start_ts, end_ts, freq=freq, inclusive = 'left'):
             ts = pd.to_datetime(interp_date)
             subset = df[df["datetime"] == ts]
             for param in params:

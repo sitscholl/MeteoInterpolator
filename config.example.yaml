@@ -2,7 +2,7 @@ general:
   stations: ['19300MS', '69900MS', '09700MS', '82200MS']
   timezone: Europe/Rome
   start: "25-01-2026"
-  end: "26-01-2026"
+  end: "26-01-2026"  #non-inclusive
   parameters: ["tair_2m"]
 
 base_grid:
