@@ -277,6 +277,13 @@ class ProvinceAPI(BaseMeteoHandler):
         queue = asyncio.Queue(maxsize = self.max_concurrent_requests *2)
         start = start.astimezone(pytz.timezone(self.timezone))
         end = end.astimezone(pytz.timezone(self.timezone))
+
+        if self.inclusive in ("both", "right"):
+            end = end - pd.Timedelta(self.freq)
+            if end < start:
+                logger.warning(
+                    f"Adjusted end time {end} is before start {start} after applying inclusive='{self.inclusive}'."
+                )
         
         dates_split = split_dates(start, end, freq = self.freq, n_days = self.chunk_size_days, split_on_year=split_on_year)
 
