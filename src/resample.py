@@ -1,8 +1,6 @@
 import pandas as pd
 
 import logging
-import functools
-import re
 from typing import Callable, Any, Iterable
 
 logger = logging.getLogger(__name__)
@@ -53,6 +51,8 @@ class MeteoResampler:
     def _normalize_agg_list(aggfunc: str | Callable | Iterable[str | Callable]):
         if isinstance(aggfunc, (list, tuple)):
             return list(aggfunc), True
+        if isinstance(aggfunc, Iterable) and not isinstance(aggfunc, (str, bytes)):
+            return list(aggfunc), True
         return [aggfunc], False
 
     @staticmethod
@@ -60,11 +60,6 @@ class MeteoResampler:
         if isinstance(aggfunc, str):
             return aggfunc.strip().lower()
         return getattr(aggfunc, "__name__", "custom")
-
-    def _get_mapped_aggfunc(self, column: str, resample_colmap: dict[str, str | Callable | list[str | Callable] | tuple[str | Callable, ...]]):
-        if column in resample_colmap:
-            return resample_colmap[column]
-        return None
 
     def _prepare_named_aggs(
         self,
@@ -78,7 +73,7 @@ class MeteoResampler:
         named_aggs = {}
         
         for col in value_cols:
-            mapped = self._get_mapped_aggfunc(col, self.resample_colmap)
+            mapped = self.resample_colmap.get(col)
             if mapped is None:
                 if default_aggfunc is None:
                     continue
@@ -100,7 +95,7 @@ class MeteoResampler:
         self,
         data: pd.DataFrame,
         freq: str,
-        default_aggfunc: str | Callable = 'mean',
+        default_aggfunc: str | Callable | None = "mean",
         datetime_col: str = "datetime",
         groupby_cols: list[str] | None = None,
         min_sample_size: int = 1,
@@ -108,7 +103,7 @@ class MeteoResampler:
 
         if min_sample_size < 1:
             raise ValueError(f"min_sample_size must be >= 1. Got {min_sample_size}")
-        groupby_cols = groupby_cols if groupby_cols else []
+        groupby_cols = list(groupby_cols) if groupby_cols else []
 
         if data.empty:
             return data.copy()
@@ -126,7 +121,7 @@ class MeteoResampler:
 
         # 3. Build Named Aggregations
         value_cols = [c for c in df.columns if c not in required_cols]
-        named_aggs = self._prepare_named_aggs(value_cols, default_aggfunc, df[datetime_col])
+        named_aggs = self._prepare_named_aggs(value_cols, default_aggfunc)
 
         if not named_aggs:
             return df[required_cols].drop_duplicates().sort_values(by=[datetime_col] + groupby_cols)
