@@ -5,6 +5,8 @@ from typing import Optional, Tuple, Callable
 import httpx
 import numpy as np
 import pandas as pd
+import geopandas as gpd
+from shapely.geometry import Point
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +90,12 @@ class MeteoData:
     def _assert_unique(lst, name: str):
         if len(lst) != len(set(lst)):
             raise ValueError(f"Found duplicated elements for attribute {name} in MeteoData.")
+
+    def to_geodataframe(self):
+        return gpd.GeoDataFrame(
+            {'id': self.ids, "geometry": [Point(x[0], x[1]) for x in self.coords]},
+            crs = 4326
+        )
 
     def get_xy_data(self, parameter: str, timestamp, res = 'daily', **kwargs) -> tuple[np.ndarray, np.ndarray]:
         if res == 'daily':

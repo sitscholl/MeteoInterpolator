@@ -55,6 +55,7 @@ class RuntimeContext:
         self.timezone = general_config['timezone']
         self.start = self._localize_datetime(general_config['start'])
         self.end = self._localize_datetime(general_config['end'])
+        self.require_stations_in_aoi = general_config.get('require_stations_in_aoi', True)
        
         parameters = general_config.get('parameters', ['tair_2m'])
         if isinstance(parameters, (list, tuple)):

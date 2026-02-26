@@ -1,7 +1,9 @@
-from dataclasses import dataclass
-from pyproj import CRS, Transformer
 import rioxarray
 import xarray as xr
+import geopandas as gpd
+
+from dataclasses import dataclass
+from pyproj import CRS, Transformer
 
 @dataclass(frozen=True)
 class AOI:
@@ -44,14 +46,22 @@ class AOI:
         bx2, by2 = from_local.transform(maxx_l, maxy_l)
         return min(bx1, bx2), min(by1, by2), max(bx1, bx2), max(by1, by2)
 
-    def filter_bbox(self, data: xr.DataArray | xr.Dataset, buffer_m: int | float | None = None):
+    def filter_bbox(self, data: xr.DataArray | xr.Dataset | gpd.GeoDataFrame, buffer_m: int | float | None = None):
+        if isinstance(data, (xr.DataArray, xr.Dataset)):
+            return self._filter_bbox_xarray(data, buffer_m)
+        elif isinstance(data, gpd.GeoDataFrame):
+            return self._filter_bbox_gdf(data, buffer_m)
+        else:
+            raise ValueError(f"Unsupported data type {type(data)} for filter_bbox.")
+
+    def _filter_bbox_xarray(self, data: xr.DataArray | xr.Dataset, buffer_m: int | float | None = None):
         if data.rio.crs is None:
-            raise ValueError("Data has no CRS; cannot apply AOI")
+            raise ValueError("Xarray data has no CRS; cannot apply AOI")
 
         dst_epsg = data.rio.crs.to_epsg()
 
         if dst_epsg is None:
-            raise ValueError("Data CRS has no EPSG code; cannot apply AOI")
+            raise ValueError("Xarray data CRS has no EPSG code; cannot apply AOI")
 
         if buffer_m is None or buffer_m == 0:
             minx, miny, maxx, maxy = self._to_crs(dst_epsg)
@@ -59,6 +69,22 @@ class AOI:
             minx, miny, maxx, maxy = self._buffer_bbox_in_meters(dst_epsg, buffer_m)
         
         return data.rio.clip_box(minx=minx, miny=miny, maxx=maxx, maxy=maxy)
+
+    def _filter_bbox_gdf(self, data: gpd.GeoDataFrame, buffer_m: int | float | None = None):
+        if data.crs is None:
+            raise ValueError("Geodataframe has no crs; cannot apply AOI")
+
+        dst_epsg = data.crs.to_epsg()
+
+        if dst_epsg is None:
+            raise ValueError("Geodataframe CRS has no EPSG code; cannot apply AOI")
+
+        if buffer_m is None or buffer_m == 0:
+            minx, miny, maxx, maxy = self._to_crs(dst_epsg)
+        else:
+            minx, miny, maxx, maxy = self._buffer_bbox_in_meters(dst_epsg, buffer_m)
+        
+        return data.cx[minx:maxx, miny:maxy]
 
     @property
     def bounds(self):
