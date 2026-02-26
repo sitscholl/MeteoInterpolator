@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import logging
-from typing import Optional, Tuple, Callable
+from typing import Optional, Tuple
 
 import httpx
 import numpy as np
@@ -130,60 +130,6 @@ class MeteoData:
             crs = self.crs
         )
 
-    def get_xy_data(self, parameter: str, timestamp, res = 'daily', **kwargs) -> tuple[np.ndarray, np.ndarray]:
-        if res == 'daily':
-            X, y = self._get_xy_data_daily(parameter = parameter, date = timestamp, **kwargs)
-        else:
-            raise NotImplementedError(f"Resolution {res} not implemented. Choose one of ['daily']")
-        return X, y
-
-    def _get_xy_data_daily(
-        self,
-        parameter: str,
-        date,
-        agg: str | Callable = "mean",
-    ) -> tuple[np.ndarray, np.ndarray]:
-        if parameter is None:
-            raise ValueError("Parameter cannot be None")
-
-        day = pd.to_datetime(date, utc = True).normalize()
-        values = []
-        elevations = []
-
-        for elev, tbl in zip(self.elevation, self.data):
-            if elev is None:
-                continue
-            if parameter not in tbl.columns:
-                continue
-            if "datetime" not in tbl.columns:
-                raise ValueError(f"Missing 'datetime' column in station data. Got columns: {list(tbl.columns)}")
-
-            mask = tbl["datetime"].dt.normalize() == day
-            series = tbl.loc[mask, parameter].dropna()
-            if series.empty:
-                continue
-
-            if callable(agg):
-                val = agg(series)
-            else:
-                if not hasattr(series, agg):
-                    raise ValueError(f"Unknown aggregation '{agg}' for daily data.")
-                val = getattr(series, agg)()
-
-            if pd.isna(val):
-                continue
-
-            values.append(val)
-            elevations.append(elev)
-
-        if len(values) == 0:
-            logger.warning(f"No data found for parameter '{parameter}' on {day.date()}")
-            return np.array([]), np.array([])
-
-        y = np.asarray(values, dtype=float)
-        X = np.asarray(elevations, dtype=float).reshape(-1, 1)
-        return X, y
-
     def get_station_data(self, station_id: str):
         if station_id not in self.ids:
             logger.warning(f"No data available for station {station_id}")
@@ -191,16 +137,42 @@ class MeteoData:
         station_idx = self.ids.index(station_id)
         return self.data[station_idx]
 
-    def iter_samples(self, start, end, params: list[str], res = 'daily', agg = 'mean'):
-
-        if res != 'daily':
-            raise NotImplementedError("Only daily resolution has been implemented so far.")
-
-        freq = 'D'
+    def iter_samples(self, start, end, params: list[str], freq: str = "D"):
         if isinstance(params, str):
             params = [params]
 
         for interp_date in pd.date_range(start, end, freq = freq):
             for param in params:
-                X, y = self.get_xy_data(param, interp_date, res = res, agg = agg)
+                values = []
+                elevations = []
+
+                ts = pd.to_datetime(interp_date, utc=True)
+
+                for elev, tbl in zip(self.elevation, self.data):
+                    if elev is None:
+                        continue
+                    if param not in tbl.columns:
+                        continue
+                    if "datetime" not in tbl.columns:
+                        raise ValueError(
+                            f"Missing 'datetime' column in station data. Got columns: {list(tbl.columns)}"
+                        )
+
+                    series = tbl.loc[tbl["datetime"] == ts, param].dropna()
+                    if series.empty:
+                        continue
+                    val = series.iloc[0]
+                    if pd.isna(val):
+                        continue
+
+                    values.append(val)
+                    elevations.append(elev)
+
+                if len(values) == 0:
+                    logger.warning(f"No data found for parameter '{param}' on {ts.date()}")
+                    yield (param, interp_date, np.array([]), np.array([]))
+                    continue
+
+                y = np.asarray(values, dtype=float)
+                X = np.asarray(elevations, dtype=float).reshape(-1, 1)
                 yield (param, interp_date, X, y)
