@@ -3,6 +3,8 @@ import xarray as xr
 import rioxarray
 from rasterio.enums import Resampling
 import math
+import hashlib
+import json
 
 import logging
 
@@ -28,9 +30,36 @@ class BaseGrid:
         aoi: AOI | None = None,
         aoi_buffer_m: int | float | None = None,
         resampling_method: str | Resampling = 'bilinear',
+        cache: bool = True,
         **kwargs
         ):
-        
+
+        cache_path = self._cache_path(
+            path = path,
+            target_crs = target_crs,
+            target_res = target_res,
+            target_x_dim = target_x_dim,
+            target_y_dim = target_y_dim,
+            crs = crs,
+            x_dim = x_dim,
+            y_dim = y_dim,
+            aoi = aoi,
+            aoi_buffer_m = aoi_buffer_m,
+            resampling_method = resampling_method,
+            **kwargs
+        ) if cache else None
+
+        if cache_path is not None and cache_path.exists():
+            logger.info(f"Base grid cache hit at {cache_path}")
+            data = self.open(cache_path, **kwargs)
+            self.data = data
+            self.crs = data.rio.crs.to_epsg() if data.rio.crs is not None else None
+            res_x, res_y = data.rio.resolution()
+            self.res = (abs(res_x), abs(res_y))
+            self.x_dim = target_x_dim
+            self.y_dim = target_y_dim
+            return
+
         data = self.open(path, **kwargs)
 
         data = self._normalize_spatial_dims(data, x_dim=x_dim, y_dim=y_dim, x_dim_target = target_x_dim, y_dim_target = target_y_dim)
@@ -93,14 +122,80 @@ class BaseGrid:
         if data.isnull().any().item():
             raise ValueError('BaseGrid cannot contain NaN values. Check reprojection and aoi settings. Set higher value for aoi_buffer_m?')
 
+        if cache_path is not None:
+            cache_path.parent.mkdir(parents = True, exist_ok = True)
+            data.to_zarr(cache_path)
+            logger.info(f"Base grid cache written to {cache_path}")
+
         self.data = data
         self.crs = target_crs
         self.res = target_res if target_res is not None else original_res
         self.x_dim = target_x_dim
         self.y_dim = target_y_dim
 
-    def open(self, path, var: str | None = None, squeeze: bool = True):
-        data = xr.open_dataset(path)
+    def _cache_path(
+        self,
+        path: Path,
+        target_crs: int | None,
+        target_res: int | float | tuple[float, float] | None,
+        target_x_dim: str,
+        target_y_dim: str,
+        crs: int | None,
+        x_dim: str | None,
+        y_dim: str | None,
+        aoi: AOI | None,
+        aoi_buffer_m: int | float | None,
+        resampling_method: str | Resampling,
+        **kwargs
+    ) -> Path:
+        if isinstance(target_res, (int, float)):
+            target_res = (float(target_res), float(target_res))
+        elif target_res is not None:
+            target_res = (float(target_res[0]), float(target_res[1]))
+
+        if isinstance(resampling_method, Resampling):
+            resampling_method = resampling_method.name.lower()
+        else:
+            resampling_method = str(resampling_method).lower()
+
+        var = kwargs.get("var")
+        squeeze = kwargs.get("squeeze", True)
+
+        aoi_info = None
+        if aoi is not None:
+            aoi_bounds = tuple(float(v) for v in aoi.bounds)
+            aoi_crs = getattr(aoi, "crs", None)
+            aoi_info = {"bounds": aoi_bounds, "crs": aoi_crs}
+
+        key_payload = {
+            "source_path": str(Path(path).resolve()),
+            "var": var,
+            "squeeze": squeeze,
+            "target_crs": target_crs,
+            "target_res": target_res,
+            "target_x_dim": target_x_dim,
+            "target_y_dim": target_y_dim,
+            "crs": crs,
+            "x_dim": x_dim,
+            "y_dim": y_dim,
+            "aoi": aoi_info,
+            "aoi_buffer_m": aoi_buffer_m,
+            "resampling_method": resampling_method,
+        }
+
+        key_json = json.dumps(key_payload, sort_keys = True, default = str)
+        key_hash = hashlib.sha256(key_json.encode("utf-8")).hexdigest()[:16]
+        return Path("data") / f"{Path(path).stem}.{key_hash}.zarr"
+
+    def open(self, path: str, var: str | None = None, squeeze: bool = True):
+
+        try:
+            if Path(path).suffix == '.zarr':
+                data = xr.open_zarr(path)
+            else:
+                data = xr.open_dataset(path)
+        except Exception as e:
+            logger.exception(f"Error opending base grid at {path}: {e}")
         
         available_vars = list(data.data_vars.keys())
         if var is not None:
