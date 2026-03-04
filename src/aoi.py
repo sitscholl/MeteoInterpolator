@@ -88,4 +88,4 @@ class AOI:
 
     @property
     def bounds(self):
-        return f"{self.minx}, {self.miny}, {self.maxx}, {self.maxy}"
+        return (self.minx, self.miny, self.maxx, self.maxy)
