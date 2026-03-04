@@ -28,7 +28,7 @@ class GridWriter:
             scale_factor: int | float = 1,
             dtype: str = 'int32',
             drop_attrs: bool = True,
-            append_dims: Sequence[str] = ('year',),
+            append_dims: Sequence[str] = ('time',),
             align: bool = True,
             method: str = 'nearest'
         ):
@@ -46,11 +46,13 @@ class GridWriter:
         self.compressor = DEFAULT_COMPRESSOR
         self.variables = list(variables)
 
+        self.coords = None
         if isinstance(coords, Mapping):
             self.coords = dict(coords)
         elif coords is not None:
             raise TypeError("coords must be a mapping of dimension names to sizes or None.")
 
+        self.shape = None
         if shape is not None:
             self.shape = tuple(shape)
 
@@ -70,6 +72,7 @@ class GridWriter:
                         f"Coordinate '{dim}' length ({coord_len}) does not match expected shape entry ({expected})."
                     )
 
+        self.chunks = None
         if isinstance(chunks, Mapping):
             self.chunks = dict(chunks)
         elif chunks is not None:
@@ -114,8 +117,55 @@ class GridWriter:
             return len(a) == len(b) and all(
                 GridWriter._values_equal(x, y) for x, y in zip(a, b)
             )
-        equals = a is b
-        return equals
+        return a == b
+
+    def _initialize_spec_from_data(self, data: xr.Dataset) -> None:
+        if not isinstance(data, xr.Dataset):
+            raise TypeError("Data must be an xarray Dataset.")
+        if not data.data_vars:
+            raise ValueError("Dataset has no data variables to infer spec from.")
+
+        ref_var = next(iter(data.data_vars))
+        ref = data[ref_var]
+
+        # Shape
+        if self.shape is None:
+            self.shape = tuple(ref.shape)
+        elif tuple(self.shape) != tuple(ref.shape):
+            raise ValueError(
+                f"Provided shape {self.shape} does not match data shape {ref.shape}."
+            )
+
+        # Coords
+        if self.coords is None:
+            self.coords = {dim: ref[dim].values for dim in ref.dims}
+        else:
+            for dim, coord in self.coords.items():
+                if dim not in ref.dims:
+                    raise ValueError(
+                        f"Provided coord dim '{dim}' is not present in data dims {ref.dims}."
+                    )
+                ref_coord = ref[dim].values
+                if not np.array_equal(np.asarray(coord), np.asarray(ref_coord)):
+                    raise ValueError(
+                        f"Provided coordinate values for '{dim}' do not match data."
+                    )
+
+        # CRS
+        if self.crs is None:
+            self.crs = data.rio.crs
+
+        # Chunks (only if uniform along each dim)
+        if self.chunks is None and ref.chunks is not None:
+            uniform_chunks = {}
+            for dim, chunks in zip(ref.dims, ref.chunks):
+                if len(set(chunks)) == 1:
+                    uniform_chunks[dim] = chunks[0]
+                else:
+                    uniform_chunks = None
+                    break
+            if uniform_chunks is not None:
+                self.chunks = uniform_chunks
                 
     def _check_dims(self, arr_existing, arr_new, append_dims):
         existing_dims = {
@@ -157,15 +207,15 @@ class GridWriter:
             
             if arr_existing.chunks is not None:
                 existing_chunks = {
-                    chunk
+                    dim: chunk
                     for chunk, dim in zip(arr_existing.chunks, arr_existing.dims)
                     if dim not in append_dims
                 }
             else:
-                existing_chunks = None
+                existing_chunks = {}
 
             new_chunks = {
-                chunk
+                dim: chunk
                 for chunk, dim in zip(arr_new.chunks, arr_new.dims)
                 if dim not in append_dims
             }
@@ -274,10 +324,17 @@ class GridWriter:
         # Create dummy dataset to preallocate a zarr store with necessary metadata but no data
         if self.shape is None:
             raise ValueError('ZarrSpec shape is None. Cannot create base zarr store.')
-        dummy = xr.DataArray(np.empty(self.shape), coords=self.coords)
+
+        dims = list(self.coords.keys()) if self.coords is not None else None
+        dummy = xr.DataArray(np.empty(self.shape), coords=self.coords, dims=dims)
 
         if self.chunks:
             dummy = dummy.chunk(self.chunks)
+
+        if "time" not in dummy.dims:
+            dummy = dummy.expand_dims({"time": self.time_coords})
+        else:
+            dummy = dummy.assign_coords(time=self.time_coords)
 
         dummy = dummy.expand_dims({'var': self.variables}).to_dataset(dim='var')
 
@@ -324,6 +381,8 @@ class GridWriter:
 
         if not isinstance(data, xr.Dataset):
             raise TypeError("Data must be an xarray Dataset or DataArray.")
+
+        self._initialize_spec_from_data(data)
 
         unknown_vars = set(data.data_vars) - set(self.variables)
         if unknown_vars:
