@@ -5,11 +5,12 @@ from typing import Any, Mapping, Sequence
 import pandas as pd
 import numpy as np
 import xarray as xr
-from numcodecs import Blosc
+from zarr.codecs import Blosc
+from pyproj import CRS
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_COMPRESSOR = Blosc(cname="zstd", clevel=3, shuffle=Blosc.SHUFFLE)
+DEFAULT_COMPRESSOR = Blosc(cname="zstd", clevel=3, shuffle=1)
 
 class GridWriter:
 
@@ -91,7 +92,7 @@ class GridWriter:
             raise ValueError("Cannot build encoding because no variables are defined.")
         return {
             var: {
-                "compressor": self.compressor,
+                "compressors": (self.compressor,),
                 "_FillValue": self.fill_value,
                 "scale_factor": self.scale_factor,
                 "dtype": self.dtype,
@@ -153,19 +154,14 @@ class GridWriter:
 
         # CRS
         if self.crs is None:
-            self.crs = data.rio.crs
+            self.crs = data.rio.crs or data.attrs.get("crs")
 
-        # Chunks (only if uniform along each dim)
+        # Chunks
         if self.chunks is None and ref.chunks is not None:
-            uniform_chunks = {}
-            for dim, chunks in zip(ref.dims, ref.chunks):
-                if len(set(chunks)) == 1:
-                    uniform_chunks[dim] = chunks[0]
-                else:
-                    uniform_chunks = None
-                    break
-            if uniform_chunks is not None:
-                self.chunks = uniform_chunks
+            self.chunks = {
+                dim: tuple(chunks)
+                for dim, chunks in zip(ref.dims, ref.chunks)
+            }
                 
     def _check_dims(self, arr_existing, arr_new, append_dims):
         existing_dims = {
@@ -262,15 +258,21 @@ class GridWriter:
             )
 
         ds_existing = xr.open_zarr(self.path)
+        existing_crs = ds_existing.rio.crs or ds_existing.attrs.get('crs')
 
-        if ds_existing.rio.crs is None and self.crs is not None:
-            logger.debug("Setting CRS on existing zarr store from specification.")
-            ds_existing = ds_existing.rio.write_crs(self.crs)
+        if existing_crs is None:
+            raise ValueError(f"Cannot read crs info from existing zarr store at {self.path}")
 
-        if ds_existing.rio.crs != ds_new.rio.crs:
+        new_crs = ds_new.rio.crs or ds_new.attrs.get("crs")
+        if new_crs is None:
+            raise ValueError("Cannot read crs info from new dataset.")
+
+        existing_crs_wkt = CRS.from_user_input(existing_crs).to_wkt()
+        new_crs_wkt = CRS.from_user_input(new_crs).to_wkt()
+        if existing_crs_wkt != new_crs_wkt:
             raise ValueError(
                 "Coordinate systems of the existing store and new data differ: "
-                f"{ds_existing.rio.crs} vs {ds_new.rio.crs}"
+                f"{existing_crs} vs {new_crs}"
             )
 
         append_dims = set(self.append_dims)
@@ -311,6 +313,10 @@ class GridWriter:
 
         return ds_new
 
+    def _write_crs_info(self, ds, crs):
+        ds = ds.rio.write_crs(crs)
+        return ds.assign_attrs(crs = CRS.from_user_input(crs).to_wkt())
+
     def create(self, overwrite: bool = False):
         """
         Creates a zarr store according to the parameters in self
@@ -323,7 +329,10 @@ class GridWriter:
 
         # Create dummy dataset to preallocate a zarr store with necessary metadata but no data
         if self.shape is None:
-            raise ValueError('ZarrSpec shape is None. Cannot create base zarr store.')
+            raise ValueError('Shape information is None. Cannot create base zarr store.')
+
+        if self.crs is None:
+            raise ValueError('No crs information available. Cannot create zarr store without crs.')
 
         dims = list(self.coords.keys()) if self.coords is not None else None
         dummy = xr.DataArray(np.empty(self.shape), coords=self.coords, dims=dims)
@@ -337,9 +346,8 @@ class GridWriter:
             dummy = dummy.assign_coords(time=self.time_coords)
 
         dummy = dummy.expand_dims({'var': self.variables}).to_dataset(dim='var')
-
-        if self.crs is not None:
-            dummy = dummy.rio.write_crs(self.crs)
+        
+        dummy = self._write_crs_info(dummy, self.crs)
 
         dummy.to_zarr(
             self.path,
