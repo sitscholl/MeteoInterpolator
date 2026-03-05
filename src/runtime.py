@@ -132,11 +132,12 @@ class RuntimeContext:
 
         ## Grid Writer
         output_config = config.get('output')
-        self.grid_writer = GridWriter(**output_config) if output_config is not None else None
         if output_config is None:
             logger.info("No output configuration provided. Results will not be saved")
+            self.grid_writer = None
         else:
-            logger.info(f"Initialized grid writer pointing to {output_config['path']}")
+            self.grid_writer = GridWriter.create(output_config['format'], **output_config.get('options', {}))
+            logger.info(f"Initialized grid writer with output format {output_config['format']} pointing to {self.grid_writer.path}")
 
         ## Database
         db_config = config.get('database')

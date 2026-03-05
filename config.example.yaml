@@ -23,3 +23,8 @@ meteo_input:
 
 vertical_model:
   fit_intercept: True
+
+output:
+  format: tiff
+  options:
+    path: data/results

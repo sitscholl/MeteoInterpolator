@@ -89,6 +89,10 @@ class ZarrWriter(GridWriter):
         self.align = align
         self.method = method
 
+    @classmethod
+    def key(cls):
+        return 'zarr'
+
     def get_encoding(self) -> dict:
         if not self.variables:
             raise ValueError("Cannot build encoding because no variables are defined.")

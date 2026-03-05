@@ -12,6 +12,10 @@ class TiffWriter(GridWriter):
     ):
         self.path = Path(path)
 
+    @classmethod
+    def key(cls):
+        return 'tiff'
+
     def _to_tiff(self, arr: xr.DataArray, out_path: str, overwrite: bool = False):
         
         if Path(out_path).exists() and not overwrite:
