@@ -132,7 +132,15 @@ class GridWriter:
 
         # Shape (ignore append dims when validating)
         if self.shape is None:
-            self.shape = tuple(ref.shape)
+            dims = list(ref.dims)
+            append_dims = set(self.append_dims)
+            shape = []
+            for dim in dims:
+                if dim in append_dims and dim == "time":
+                    shape.append(len(self.time_coords))
+                else:
+                    shape.append(ref.sizes[dim])
+            self.shape = tuple(shape)
         else:
             dims = list(self.coords.keys()) if self.coords is not None else list(ref.dims)
             append_dims = set(self.append_dims)
@@ -148,7 +156,13 @@ class GridWriter:
 
         # Coords (ignore append dims when validating)
         if self.coords is None:
-            self.coords = {dim: ref[dim].values for dim in ref.dims}
+            self.coords = {}
+            append_dims = set(self.append_dims)
+            for dim in ref.dims:
+                if dim in append_dims and dim == "time":
+                    self.coords[dim] = self.time_coords
+                else:
+                    self.coords[dim] = ref[dim].values
         else:
             append_dims = set(self.append_dims)
             for dim, coord in self.coords.items():
