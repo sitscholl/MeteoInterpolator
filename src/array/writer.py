@@ -25,9 +25,9 @@ class GridWriter:
             coords: Mapping[str, Any] | None = None,
             crs: Any | None = None,
             chunks: Mapping[str, Any] | None = None,
-            fill_value: int | float = -999,
-            scale_factor: int | float = 1,
-            dtype: str = 'int32',
+            fill_value: int | float | None = None,
+            scale_factor: int | float | None = None,
+            dtype: str | None = None,
             drop_attrs: bool = True,
             append_dims: Sequence[str] = ('time',),
             align: bool = True,
@@ -90,12 +90,13 @@ class GridWriter:
     def get_encoding(self) -> dict:
         if not self.variables:
             raise ValueError("Cannot build encoding because no variables are defined.")
+        scale_factor = None if self.scale_factor == 1 else self.scale_factor
         return {
             var: {
                 "compressors": (self.compressor,),
-                "_FillValue": self.fill_value,
-                "scale_factor": self.scale_factor,
-                "dtype": self.dtype,
+                **({"dtype": self.dtype} if self.dtype is not None else {}),
+                **({"_FillValue": self.fill_value} if self.fill_value is not None else {}),
+                **({"scale_factor": scale_factor} if scale_factor is not None else {}),
             }
             for var in self.variables
         }
@@ -267,8 +268,8 @@ class GridWriter:
         if new_crs is None:
             raise ValueError("Cannot read crs info from new dataset.")
 
-        existing_crs_wkt = CRS.from_user_input(existing_crs).to_wkt()
-        new_crs_wkt = CRS.from_user_input(new_crs).to_wkt()
+        existing_crs_wkt = CRS.from_user_input(existing_crs).to_epsg()
+        new_crs_wkt = CRS.from_user_input(new_crs).to_epsg()
         if existing_crs_wkt != new_crs_wkt:
             raise ValueError(
                 "Coordinate systems of the existing store and new data differ: "
@@ -315,7 +316,7 @@ class GridWriter:
 
     def _write_crs_info(self, ds, crs):
         ds = ds.rio.write_crs(crs)
-        return ds.assign_attrs(crs = CRS.from_user_input(crs).to_wkt())
+        return ds.assign_attrs(crs = CRS.from_user_input(crs).to_epsg())
 
     def create(self, overwrite: bool = False):
         """
@@ -412,9 +413,10 @@ class GridWriter:
         )
 
         #Tranform to float to avoid error with encoding
-        for var in aligned.keys():
-            if np.issubdtype(aligned[var].dtype, np.integer):
-                aligned[var] = aligned[var].astype(np.float32)
+        if self.dtype is not None:
+            for var in aligned.keys():
+                if np.issubdtype(aligned[var].dtype, np.integer):
+                    aligned[var] = aligned[var].astype(np.float32)
 
         aligned.to_zarr(
             self.path,
