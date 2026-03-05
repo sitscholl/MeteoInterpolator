@@ -5,12 +5,12 @@ from typing import Any, Mapping, Sequence
 import pandas as pd
 import numpy as np
 import xarray as xr
-from zarr.codecs import Blosc
+from zarr.codecs import ZstdCodec
 from pyproj import CRS
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_COMPRESSOR = Blosc(cname="zstd", clevel=3, shuffle=1)
+DEFAULT_COMPRESSOR = ZstdCodec(level=3)
 
 class GridWriter:
 
@@ -234,7 +234,7 @@ class GridWriter:
                         f"are changed by the write. Missing values: {missing_dim_values}"
                     )
 
-    def validate_store(self, ds_new: xr.Dataset) -> xr.Dataset:
+    def _validate_store(self, ds_new: xr.Dataset) -> tuple[xr.Dataset, dict]:
         """
         Ensures that an existing Zarr store aligns with ds_new for appending data.
         If align is true, ds_new will be reprojected to match the coordinate values of the existing zarr store.
@@ -312,7 +312,7 @@ class GridWriter:
 
         logger.debug('New data succesfully validated against existing zarr store.')
 
-        return ds_new
+        return ds_new, dict(ds_existing.attrs)
 
     def _write_crs_info(self, ds, crs):
         ds = ds.rio.write_crs(crs)
@@ -402,10 +402,12 @@ class GridWriter:
         if not self.path.exists() or overwrite:
             self.create(overwrite=overwrite)
 
-        aligned = self.validate_store(ds_new=data)
+        aligned, existing_attrs = self._validate_store(ds_new=data)
 
         if self.drop_attrs:
-            aligned = aligned.drop_attrs()
+            aligned = aligned.assign_attrs(existing_attrs)
+            for var in aligned.data_vars:
+                aligned[var].attrs.clear()
 
         aligned = aligned.drop_vars(
             ['spatial_ref', 'rotated_latitude_longitude'],
