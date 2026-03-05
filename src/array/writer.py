@@ -286,8 +286,8 @@ class GridWriter:
                     "Adding new variables is not supported."
                 )
 
-            arr_existing = ds_existing[var_name]
-            arr_new = ds_new[var_name]
+            arr_existing = ds_existing[var_name].drop_vars('spatial_ref', errors='ignore')
+            arr_new = ds_new[var_name].drop_vars('spatial_ref', errors='ignore')
 
             needs_alignment_var = self._check_dims(arr_existing, arr_new, append_dims)
             if needs_alignment_var:
