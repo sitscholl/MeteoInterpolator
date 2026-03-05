@@ -130,23 +130,34 @@ class GridWriter:
         ref_var = next(iter(data.data_vars))
         ref = data[ref_var]
 
-        # Shape
+        # Shape (ignore append dims when validating)
         if self.shape is None:
             self.shape = tuple(ref.shape)
-        elif tuple(self.shape) != tuple(ref.shape):
-            raise ValueError(
-                f"Provided shape {self.shape} does not match data shape {ref.shape}."
-            )
+        else:
+            dims = list(self.coords.keys()) if self.coords is not None else list(ref.dims)
+            append_dims = set(self.append_dims)
+            for dim, expected in zip(dims, self.shape):
+                if dim in append_dims:
+                    continue
+                actual = ref.sizes.get(dim)
+                if actual != expected:
+                    raise ValueError(
+                        "Provided shape does not match data shape for non-append dims: "
+                        f"dim '{dim}' expected {expected}, got {actual}."
+                    )
 
-        # Coords
+        # Coords (ignore append dims when validating)
         if self.coords is None:
             self.coords = {dim: ref[dim].values for dim in ref.dims}
         else:
+            append_dims = set(self.append_dims)
             for dim, coord in self.coords.items():
                 if dim not in ref.dims:
                     raise ValueError(
                         f"Provided coord dim '{dim}' is not present in data dims {ref.dims}."
                     )
+                if dim in append_dims:
+                    continue
                 ref_coord = ref[dim].values
                 if not np.array_equal(np.asarray(coord), np.asarray(ref_coord)):
                     raise ValueError(
