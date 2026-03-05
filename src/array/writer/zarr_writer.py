@@ -8,11 +8,13 @@ import xarray as xr
 from zarr.codecs import ZstdCodec
 from pyproj import CRS
 
+from .base import GridWriter
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_COMPRESSOR = ZstdCodec(level=3)
 
-class GridWriter:
+class ZarrWriter(GridWriter):
 
     def __init__(
             self, 

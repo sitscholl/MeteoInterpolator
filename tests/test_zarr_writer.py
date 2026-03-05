@@ -5,7 +5,7 @@ import rioxarray  # noqa: F401
 import xarray as xr
 from pyproj import CRS
 
-from src.array.writer import GridWriter
+from src.array.writer.zarr_writer import ZarrWriter
 
 
 @pytest.fixture
@@ -68,7 +68,7 @@ def _make_writer(store_path, variables, coords, **kwargs):
     end = coords["time"][-1].strftime("%Y-%m-%d")
     if "dtype" not in kwargs:
         kwargs["dtype"] = "float32"
-    return GridWriter(
+    return ZarrWriter(
         path=store_path,
         start=start,
         end=end,
@@ -211,7 +211,7 @@ def test_initialize_spec_from_first_dataset(tmp_path, sample_coords, make_datase
     ds = make_dataset(coords=sample_coords, seed=7)
     start = sample_coords["time"][0].strftime("%Y-%m-%d")
     end = sample_coords["time"][-1].strftime("%Y-%m-%d")
-    writer = GridWriter(
+    writer = ZarrWriter(
         path=store_path,
         start=start,
         end=end,
