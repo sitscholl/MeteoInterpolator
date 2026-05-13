@@ -130,7 +130,11 @@ class InterpolationWorkflow:
         )
 
         logger.info(f"Interpolating parameter {param} over period {start} - {end} with frequency {_FREQ}")
-        grid_writer = self.context.create_grid_writer(param=param, start=start, end=end, freq=_FREQ)
+        grid_writer = (
+            self.context.grid_writer.initialize(param=param, start=start, end=end, freq=_FREQ)
+            if self.context.grid_writer is not None
+            else None
+        )
         results = self._interpolate_param(meteo_data, param, start, end, grid_writer=grid_writer)
         if len(results) == 0:
             raise ValueError(f"No interpolation results were produced for parameter {param} over period {start} - {end}.")

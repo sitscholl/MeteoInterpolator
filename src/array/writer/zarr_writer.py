@@ -19,10 +19,11 @@ class ZarrWriter(GridWriter):
     def __init__(
             self, 
             path: Path | str,
-            start: str,
-            end: str,
-            freq: str,
-            variables: Sequence[str],
+            variables: Sequence[str] | None = None,
+            start: Any | None = None,
+            end: Any | None = None,
+            freq: str | None = None,
+            time_inclusive: str = 'both',
             shape: Sequence[int] | None = None,
             coords: Mapping[str, Any] | None = None,
             crs: Any | None = None,
@@ -36,6 +37,12 @@ class ZarrWriter(GridWriter):
             method: str = 'nearest'
         ):
         
+        self.initialized = False
+        self.start = start
+        self.end = end
+        self.freq = freq
+        self.time_coords = None
+
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -44,10 +51,8 @@ class ZarrWriter(GridWriter):
         else:
             self.append_dims = list(append_dims)
 
-        self.time_coords = pd.date_range(pd.Timestamp(start), pd.Timestamp(end), freq = freq)
-
         self.compressor = DEFAULT_COMPRESSOR
-        self.variables = list(variables)
+        self.variables = list(variables) if variables is not None else None
 
         self.coords = None
         if isinstance(coords, Mapping):
@@ -89,9 +94,90 @@ class ZarrWriter(GridWriter):
         self.align = align
         self.method = method
 
+        if start is not None or end is not None or freq is not None:
+            self._initialize_in_place(
+                variables=variables,
+                start=start,
+                end=end,
+                freq=freq,
+                inclusive=time_inclusive,
+            )
+
     @classmethod
     def key(cls):
         return 'zarr'
+
+    def _require_initialized(self):
+        if not self.initialized:
+            raise RuntimeError("ZarrWriter must be initialized before writing.")
+
+    def _copy_uninitialized(self):
+        return type(self)(
+            path=self.path,
+            variables=None,
+            shape=self.shape,
+            coords=dict(self.coords) if self.coords is not None else None,
+            crs=self.crs,
+            chunks=dict(self.chunks) if self.chunks is not None else None,
+            fill_value=self.fill_value,
+            scale_factor=self.scale_factor,
+            dtype=self.dtype,
+            drop_attrs=self.drop_attrs,
+            append_dims=list(self.append_dims),
+            align=self.align,
+            method=self.method,
+        )
+
+    def _initialize_in_place(
+        self,
+        variables: Sequence[str] | str | None,
+        start: Any | None,
+        end: Any | None,
+        freq: str | None,
+        inclusive: str,
+    ):
+        if variables is None:
+            raise ValueError("ZarrWriter initialization requires variables or param.")
+        if start is None:
+            raise ValueError("ZarrWriter initialization requires start.")
+        if end is None:
+            raise ValueError("ZarrWriter initialization requires end.")
+        if freq is None:
+            raise ValueError("ZarrWriter initialization requires freq.")
+
+        if isinstance(variables, str):
+            variables = [variables]
+
+        time_coords = pd.date_range(pd.Timestamp(start), pd.Timestamp(end), freq=freq, inclusive=inclusive)
+        if len(time_coords) == 0:
+            raise ValueError(f"No output timestamps fall between {start} and {end} with frequency {freq}.")
+
+        self.variables = list(variables)
+        self.start = time_coords[0]
+        self.end = time_coords[-1]
+        self.freq = freq
+        self.time_coords = time_coords
+        self.initialized = True
+        return self
+
+    def initialize(
+        self,
+        param: str | Sequence[str] | None = None,
+        start: Any | None = None,
+        end: Any | None = None,
+        freq: str | None = None,
+        inclusive: str = 'left',
+        **kwargs,
+    ):
+        writer = self._copy_uninitialized()
+        variables = param if param is not None else self.variables
+        return writer._initialize_in_place(
+            variables=variables,
+            start=start,
+            end=end,
+            freq=freq,
+            inclusive=inclusive,
+        )
 
     def get_encoding(self) -> dict:
         if not self.variables:
@@ -119,11 +205,11 @@ class ZarrWriter(GridWriter):
             return np.array_equal(np.asarray(a), np.asarray(b))
         if isinstance(a, Mapping) and isinstance(b, Mapping):
             return a.keys() == b.keys() and all(
-                GridWriter._values_equal(a[k], b[k]) for k in a
+                ZarrWriter._values_equal(a[k], b[k]) for k in a
             )
         if isinstance(a, Sequence) and isinstance(b, Sequence) and not isinstance(a, (str, bytes)):
             return len(a) == len(b) and all(
-                GridWriter._values_equal(x, y) for x, y in zip(a, b)
+                ZarrWriter._values_equal(x, y) for x, y in zip(a, b)
             )
         return a == b
 
@@ -349,10 +435,12 @@ class ZarrWriter(GridWriter):
         ds = ds.rio.write_crs(crs)
         return ds.assign_attrs(crs = CRS.from_user_input(crs).to_epsg())
 
-    def create(self, overwrite: bool = False):
+    def create_zarr_store(self, overwrite: bool = False):
         """
         Creates a zarr store according to the parameters in self
         """
+        self._require_initialized()
+
         if self.path.exists() and not overwrite:
             logger.warning("Zarr store at %s already exists", self.path)
             return
@@ -408,6 +496,8 @@ class ZarrWriter(GridWriter):
             If attempting to add new variables to an existing Zarr store.
         """
 
+        self._require_initialized()
+
         if self.variables is None:
             raise ValueError('Variables in ZarrSpec not specified. Cannot write to zarr store.')
 
@@ -431,7 +521,7 @@ class ZarrWriter(GridWriter):
             )
 
         if not self.path.exists() or overwrite:
-            self.create(overwrite=overwrite)
+            self.create_zarr_store(overwrite=overwrite)
 
         aligned, existing_attrs = self._validate_store(ds_new=data)
 

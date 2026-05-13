@@ -29,6 +29,9 @@ class GridWriter(ABC):
             raise ValueError(f"Unknown key {key} for output format. Choose one of {cls.registry.keys()}")
         return writer_cls(**kwargs)
 
+    def initialize(self, **kwargs):
+        return self
+
     @abstractmethod
     def write(self, data: xr.DataArray | xr.Dataset, overwrite: bool = False) -> None:
         pass

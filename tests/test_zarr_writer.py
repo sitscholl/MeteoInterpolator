@@ -78,6 +78,39 @@ def _make_writer(store_path, variables, coords, **kwargs):
     )
 
 
+def test_write_requires_initialization(tmp_path, sample_coords, make_dataset):
+    store_path = tmp_path / "grid.zarr"
+    ds = make_dataset(variables="tas", coords=sample_coords)
+    writer = ZarrWriter(path=store_path)
+
+    with pytest.raises(RuntimeError, match="initialized"):
+        writer.write(ds)
+
+
+def test_initialize_returns_run_specific_writer(tmp_path, sample_coords, make_dataset):
+    store_path = tmp_path / "grid.zarr"
+    writer = ZarrWriter(path=store_path)
+
+    initialized = writer.initialize(
+        param="tas",
+        start="2025-01-01",
+        end="2025-01-03",
+        freq="D",
+    )
+
+    assert writer.initialized is False
+    assert initialized.initialized is True
+    assert initialized.variables == ["tas"]
+    assert initialized.time_coords.equals(pd.date_range("2025-01-01", "2025-01-03", freq="D", inclusive="left"))
+
+    coords = {**sample_coords, "time": initialized.time_coords}
+    ds = make_dataset(variables="tas", coords=coords)
+    initialized.write(ds)
+
+    stored = xr.open_zarr(store_path)
+    assert stored.sizes["time"] == 2
+
+
 def test_write_creates_store_and_persists_data(tmp_path, sample_coords, sample_chunks, make_dataset):
     store_path = tmp_path / "grid.zarr"
     ds = make_dataset(coords=sample_coords, chunks=sample_chunks)

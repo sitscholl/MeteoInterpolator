@@ -1,7 +1,6 @@
 from pathlib import Path
 from dataclasses import dataclass
 import yaml
-import pandas as pd
 
 import logging
 
@@ -122,18 +121,14 @@ class RuntimeContext:
         )
 
         ## Grid Writer
-        self.output_config = config.get('output')
-        if self.output_config is None:
+        output_config = config.get('output')
+        if output_config is None:
             logger.info("No output configuration provided. Results will not be saved")
             self.grid_writer = None
         else:
-            output_format = self.output_config['format']
-            if output_format == 'zarr':
-                self.grid_writer = None
-                logger.info("Zarr grid writer will be initialized with run-specific parameter and date settings.")
-            else:
-                self.grid_writer = GridWriter.create(output_format, **self.output_config.get('options', {}))
-                logger.info(f"Initialized grid writer with output format {output_format} pointing to {self.grid_writer.path}")
+            output_format = output_config['format']
+            self.grid_writer = GridWriter.create(output_format, **output_config.get('options', {}))
+            logger.info(f"Initialized grid writer with output format {output_format} pointing to {self.grid_writer.path}")
 
         ## Database
         db_config = config.get('database')
@@ -147,30 +142,6 @@ class RuntimeContext:
         self.config_file = Path(config_file)
         self.config = load_config_file(self.config_file)
         self.initialize_runtime(self.config)
-
-    def create_grid_writer(self, param: str, start, end, freq: str):
-        if self.output_config is None:
-            return None
-
-        output_format = self.output_config['format']
-        options = dict(self.output_config.get('options', {}))
-
-        if output_format == 'zarr':
-            time_coords = pd.date_range(pd.Timestamp(start), pd.Timestamp(end), freq=freq, inclusive='left')
-            if len(time_coords) == 0:
-                raise ValueError(f"No output timestamps fall between {start} and {end} with frequency {freq}.")
-
-            options.setdefault('start', time_coords[0].isoformat())
-            options.setdefault('end', time_coords[-1].isoformat())
-            options.setdefault('freq', freq)
-            options.setdefault('variables', [param])
-
-        if output_format == 'zarr' or self.grid_writer is None:
-            writer = GridWriter.create(output_format, **options)
-        else:
-            writer = self.grid_writer
-
-        return writer
 
 if __name__ == '__main__':
     logging.basicConfig(level = logging.DEBUG, force = True)
