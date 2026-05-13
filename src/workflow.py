@@ -1,7 +1,8 @@
 from uuid import uuid4
 from datetime import datetime
 import asyncio
-from pandas import to_datetime
+import pandas as pd
+import xarray as xr
 
 import logging
 
@@ -17,6 +18,8 @@ _MIN_SAMPLE_SIZE = 60
 class InterpolationWorkflow:
 
     def __init__(self, runtime_context: RuntimeContext):
+        self.id = uuid4()
+        self.timestamp = None
         self.context = runtime_context
 
         logger.info("Initialized InterpolationWorkflow")
@@ -29,27 +32,56 @@ class InterpolationWorkflow:
         if start.tzinfo != end.tzinfo:
             raise ValueError(f"start and end date must have the same timezone. Got {start.tzinfo} vs {end.tzinfo}")
         
-    def _interpolate_param(self, meteo_data: MeteoData, param: str, start: datetime, end: datetime):
+    @staticmethod
+    def _prepare_grid_for_output(interpolated_grid: xr.DataArray | xr.Dataset, param: str, interp_date):
+        if isinstance(interpolated_grid, xr.Dataset):
+            data = interpolated_grid
+            if len(data.data_vars) == 1 and param not in data.data_vars:
+                old_name = next(iter(data.data_vars))
+                data = data.rename({old_name: param})
+        elif isinstance(interpolated_grid, xr.DataArray):
+            data = interpolated_grid.rename(param)
+        else:
+            raise TypeError(f"Interpolated grid must be an xarray DataArray or Dataset. Got {type(interpolated_grid)}")
+
+        if 'time' not in data.dims:
+            data = data.expand_dims(time=[pd.Timestamp(interp_date)])
+        else:
+            data = data.assign_coords(time=[pd.Timestamp(interp_date)])
+        return data
+
+    def _interpolate_param(self, meteo_data: MeteoData, param: str, start: datetime, end: datetime, grid_writer = None):
 
         results = []
-        for date, X, y in meteo_data.iter_samples(start, end, param):
-            logger.debug(f'Starting interpolation for {date}')
+        for interp_date, X, y in meteo_data.iter_samples(start, end, param):
+            if len(y) < 3:
+                logger.warning(
+                    "Skipping interpolation for parameter %s at %s because only %s station sample(s) are available.",
+                    param,
+                    interp_date,
+                    len(y),
+                )
+                continue
+
+            logger.info(f'Starting interpolation for parameter {param} at {interp_date}')
 
             interpolated_grid, cv_results = self.context.interpolator.interpolate(
                 X, y, target_grid = self.context.base_grid.data
                 )
+            interpolated_grid = self._prepare_grid_for_output(interpolated_grid, param, interp_date)
 
-            if self.context.grid_writer is not None:
-                self.context.grid_writer.write(interpolated_grid)
+            if grid_writer is not None:
+                grid_writer.write(interpolated_grid)
 
             if self.context.db is not None:
-                self.context.db.store_cv_results(cv_results)
+                self.context.db.store_cv_results(cv_results, workflow_id = self.id, timestamp = self.timestamp)
 
             results.append(interpolated_grid)
 
         return results
 
     async def run(self, param: str, start: datetime, end: datetime):       
+        self.timestamp = datetime.now()
         self._validate_dates(start, end)
 
         if self.context.stations is None:
@@ -67,7 +99,7 @@ class InterpolationWorkflow:
                         station_id = st, 
                         start = start, 
                         end = end, 
-                        sensor_codes = self.context.parameters, 
+                        sensor_codes = [param], 
                         validator = self.context.meteo_validator
                         )
             tasks = [asyncio.create_task(load_station(st)) for st in stations]
@@ -98,7 +130,10 @@ class InterpolationWorkflow:
         )
 
         logger.info(f"Interpolating parameter {param} over period {start} - {end} with frequency {_FREQ}")
-        results = self._interpolate_param(meteo_data, param)
+        grid_writer = self.context.create_grid_writer(param=param, start=start, end=end, freq=_FREQ)
+        results = self._interpolate_param(meteo_data, param, start, end, grid_writer=grid_writer)
+        if len(results) == 0:
+            raise ValueError(f"No interpolation results were produced for parameter {param} over period {start} - {end}.")
 
         return results
 
@@ -110,7 +145,9 @@ if __name__ == '__main__':
     async def test_workflow():
         runtime = RuntimeContext.from_config_file('config.example.yaml')
         workflow = InterpolationWorkflow(runtime)
-        await workflow.run()
+        start = pd.Timestamp("2026-01-25", tz=runtime.timezone)
+        end = pd.Timestamp("2026-01-26", tz=runtime.timezone)
+        await workflow.run(param='tair_2m', start=start, end=end)
 
     logger.info("="*50)
     logger.info('Starting Interpolation Workflow')

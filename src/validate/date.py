@@ -1,11 +1,19 @@
-from pandas import to_datetime
 import logging
+
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
 def localize_datetime_string(value: str, timezone: str):
-    "Transforms input datetime strings to datetime objects with correct timezone from runtime context"
-    ts = to_datetime(value, dayfirst = True)
+    """Transform an input datetime string to a timezone-aware pandas Timestamp."""
+    if value is None:
+        raise ValueError("Datetime value cannot be None.")
+    if timezone is None:
+        raise ValueError("Timezone cannot be None.")
+
+    ts = pd.to_datetime(value)
+    if pd.isna(ts):
+        raise ValueError(f"Could not parse datetime value {value!r}.")
 
     if ts.tzinfo is None:
         try:
@@ -13,7 +21,13 @@ def localize_datetime_string(value: str, timezone: str):
         except Exception:
             ts = ts.tz_localize(timezone, ambiguous = False, nonexistent = "shift_forward")
     else:
-        if ts.tzinfo != timezone:
-            logger.warning(f"Timezone of input datetimes is not the same as configured in the config file. Input dates will be conterted to {timezone} time")
-            ts = ts.tz_convert(timezone)
+        converted = ts.tz_convert(timezone)
+        if converted != ts:
+            logger.warning(
+                "Input datetime %s was converted to configured timezone %s as %s",
+                ts,
+                timezone,
+                converted,
+            )
+        ts = converted
     return ts

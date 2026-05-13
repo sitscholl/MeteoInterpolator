@@ -169,17 +169,17 @@ class MeteoData:
 
         start_ts = pd.to_datetime(start)
         end_ts = pd.to_datetime(end)
-        df = df[(df["datetime"] >= start_ts) & (df["datetime"] <= end_ts)]
+        df = df[(df["datetime"] >= start_ts) & (df["datetime"] < end_ts)]
 
         for interp_date, subset in df.groupby('datetime'):
             ts = pd.to_datetime(interp_date)
             
             series = subset[param].dropna()
             if series.empty:
-                logger.warning(f"No data found for parameter '{param}'and timestamp {ts}")
+                logger.warning(f"No data found for parameter '{param}' and timestamp {ts}")
                 continue
 
             y = series.to_numpy(dtype=float)
             elevations = subset.loc[series.index, "elevation"].to_numpy(dtype=float)
             X = elevations.reshape(-1, 1)
-            yield (param, interp_date, X, y)
+            yield (interp_date, X, y)
