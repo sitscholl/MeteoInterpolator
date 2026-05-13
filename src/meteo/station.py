@@ -157,32 +157,29 @@ class MeteoData:
         station_idx = self.ids.index(station_id)
         return self.data[station_idx]
 
-    def iter_samples(self, start, end, params: list[str], freq: str = "D"):
-        if isinstance(params, str):
-            params = [params]
+    def iter_samples(self, start, end, param: str):
 
         df = self.to_dataframe()
         if df.empty:
             return
         if "datetime" not in df.columns:
             raise ValueError("Missing 'datetime' column in MeteoData dataframes.")
+        if param not in df.columns:
+            raise ValueError(f"{param} not found in MeteoData columns. Choose one of {df.columns}")
 
         start_ts = pd.to_datetime(start)
         end_ts = pd.to_datetime(end)
         df = df[(df["datetime"] >= start_ts) & (df["datetime"] <= end_ts)]
 
-        for interp_date in pd.date_range(start_ts, end_ts, freq=freq, inclusive = 'left'):
+        for interp_date, subset in df.groupby('datetime'):
             ts = pd.to_datetime(interp_date)
-            subset = df[df["datetime"] == ts]
-            for param in params:
-                if param not in subset.columns:
-                    continue
-                series = subset[param].dropna()
-                if series.empty:
-                    logger.warning(f"No data found for parameter '{param}' on {ts.date()}")
-                    continue
+            
+            series = subset[param].dropna()
+            if series.empty:
+                logger.warning(f"No data found for parameter '{param}'and timestamp {ts}")
+                continue
 
-                y = series.to_numpy(dtype=float)
-                elevations = subset.loc[series.index, "elevation"].to_numpy(dtype=float)
-                X = elevations.reshape(-1, 1)
-                yield (param, interp_date, X, y)
+            y = series.to_numpy(dtype=float)
+            elevations = subset.loc[series.index, "elevation"].to_numpy(dtype=float)
+            X = elevations.reshape(-1, 1)
+            yield (param, interp_date, X, y)

@@ -1,7 +1,6 @@
 from pathlib import Path
 from dataclasses import dataclass
 import yaml
-from pandas import to_datetime
 
 import logging
 
@@ -55,17 +54,8 @@ class RuntimeContext:
             self.stations = [stations]
             
         self.timezone = general_config['timezone']
-        self.start = self._localize_datetime(general_config['start'])
-        self.end = self._localize_datetime(general_config['end'])
         self.require_stations_in_aoi = general_config.get('require_stations_in_aoi', True)
        
-        parameters = general_config.get('parameters', ['tair_2m'])
-        if isinstance(parameters, (list, tuple)):
-            self.parameters = list(parameters)
-        else:
-            self.parameters = [parameters]
-        logger.info(f"Start initializing runtime context. General settings: Start = {self.start}, End = {self.end}, Parameters = {self.parameters}")
-
         self.aoi = AOI(**config['aoi'])
         logger.info(f'Initialized aoi with bounds {self.aoi.bounds}')
 
@@ -146,17 +136,6 @@ class RuntimeContext:
             logger.info("No database configuration provided. Validation scores will not be persisted")
         else:
             logger.info(f"Initialized database connection at {db_config['path']}")
-
-    def _localize_datetime(self, value):
-        ts = to_datetime(value, dayfirst = True)
-        if ts.tzinfo is None:
-            try:
-                ts = ts.tz_localize(self.timezone)
-            except Exception:
-                ts = ts.tz_localize(self.timezone, ambiguous = False, nonexistent = "shift_forward")
-        else:
-            ts = ts.tz_convert(self.timezone)
-        return ts
 
     def update_runtime(self, config_file: str | Path):
         self.config_file = Path(config_file)

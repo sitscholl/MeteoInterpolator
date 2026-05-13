@@ -1,6 +1,7 @@
 from uuid import uuid4
 from datetime import datetime
 import asyncio
+from pandas import to_datetime
 
 import logging
 
@@ -10,25 +11,46 @@ from .meteo.station import MeteoData
 logger = logging.getLogger(__name__)
 
 ##Fixed parameters for now, make configurable later
-_PARAM_LIST = ['tair_2m']
 _FREQ = 'D'
 _MIN_SAMPLE_SIZE = 60
 
 class InterpolationWorkflow:
 
     def __init__(self, runtime_context: RuntimeContext):
-        self.id = uuid4()
-        self.timestamp = None
         self.context = runtime_context
 
         logger.info("Initialized InterpolationWorkflow")
 
-    def _validate_context(self):
-        pass
+    def _validate_dates(self, start: datetime, end: datetime):
+        if start >= end:
+            raise ValueError("start date must be before end date")
+        if start.tzinfo is None or end.tzinfo is None:
+            raise ValueError("Start and end time must both be timezone aware.")
+        if start.tzinfo != end.tzinfo:
+            raise ValueError(f"start and end date must have the same timezone. Got {start.tzinfo} vs {end.tzinfo}")
+        
+    def _interpolate_param(self, meteo_data: MeteoData, param: str, start: datetime, end: datetime):
 
-    async def run(self):
-        self.timestamp = datetime.now()
-        self._validate_context()
+        results = []
+        for date, X, y in meteo_data.iter_samples(start, end, param):
+            logger.debug(f'Starting interpolation for {date}')
+
+            interpolated_grid, cv_results = self.context.interpolator.interpolate(
+                X, y, target_grid = self.context.base_grid.data
+                )
+
+            if self.context.grid_writer is not None:
+                self.context.grid_writer.write(interpolated_grid)
+
+            if self.context.db is not None:
+                self.context.db.store_cv_results(cv_results)
+
+            results.append(interpolated_grid)
+
+        return results
+
+    async def run(self, param: str, start: datetime, end: datetime):       
+        self._validate_dates(start, end)
 
         if self.context.stations is None:
             async with self.context.meteo_loader as meteo_loader:
@@ -43,8 +65,8 @@ class InterpolationWorkflow:
                 async with semaphore:
                     return await meteo_loader.get_data(
                         station_id = st, 
-                        start = self.context.start, 
-                        end = self.context.end, 
+                        start = start, 
+                        end = end, 
                         sensor_codes = self.context.parameters, 
                         validator = self.context.meteo_validator
                         )
@@ -75,20 +97,11 @@ class InterpolationWorkflow:
             groupby_cols = ['station_id']
         )
 
-        for param, interp_date, X, y in meteo_data.iter_samples(
-            self.context.start, self.context.end, _PARAM_LIST, freq=_FREQ
-        ):
-            logger.info(f'Starting interpolation for param {param} on {interp_date}')
+        logger.info(f"Interpolating parameter {param} over period {start} - {end} with frequency {_FREQ}")
+        results = self._interpolate_param(meteo_data, param)
 
-            interpolated_grid, cv_results = self.context.interpolator.interpolate(
-                X, y, target_grid = self.context.base_grid.data
-                )
+        return results
 
-            if self.context.grid_writer is not None:
-                self.context.grid_writer.write(interpolated_grid)
-
-            if self.context.db is not None:
-                self.context.db.store_cv_results(cv_results, workflow_id = self.id, timestamp = self.timestamp)
 
 if __name__ == '__main__':
 
