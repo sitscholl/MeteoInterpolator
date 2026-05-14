@@ -4,14 +4,14 @@ import xarray as xr
 from dataclasses import dataclass
 
 from .vertical import BaseVerticalModel
-from .residuals import ResidualModel
+from .residuals import BaseResidualModel
 from .regions import InterpolationRegions
 from .cv import CrossValidator
 
 @dataclass
 class Interpolator:
     vertical_model: BaseVerticalModel
-    residual_model: ResidualModel | None = None
+    residual_model: BaseResidualModel | None = None
     regions: InterpolationRegions | None = None
     cross_validator: CrossValidator | None = None
 
