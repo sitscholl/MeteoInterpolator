@@ -1,3 +1,7 @@
+###
+#ZarrWriter is not finalized yet. Still need to decide on best api and how to initialize based on current data/base grid or preexisting zarr store
+###
+
 import logging
 from pathlib import Path
 from typing import Any, Mapping, Sequence
