@@ -296,6 +296,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "rioxarray" },
     { name = "scikit-learn" },
+    { name = "scipy" },
     { name = "xarray" },
     { name = "zarr" },
 ]
@@ -318,6 +319,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "rioxarray", specifier = ">=0.20.0" },
     { name = "scikit-learn", specifier = ">=1.8.0" },
+    { name = "scipy", specifier = ">=1.17.0" },
     { name = "xarray", specifier = ">=2025.12.0" },
     { name = "zarr", specifier = ">=3.1.5" },
 ]
