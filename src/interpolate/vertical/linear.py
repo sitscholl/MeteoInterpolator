@@ -6,6 +6,10 @@ class LinearVerticalModel(BaseVerticalModel):
     def __init__(self, **kwargs):
         self.estimator = LinearRegression(**kwargs)
 
+    @classmethod
+    def key(cls):
+        return "linear"
+
     def fit(self, X, y):
         self.estimator.fit(X, y)
         return self

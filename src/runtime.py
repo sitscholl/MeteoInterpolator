@@ -10,7 +10,7 @@ from .meteo.base import BaseMeteoHandler
 from .resample import MeteoResampler
 from .validate.meteo import MeteoValidator
 from .datagaps import Gapfiller
-from .interpolate import Interpolator, VerticalModel, ResidualModel, InterpolationRegions, CrossValidator
+from .interpolate import Interpolator
 from .array.writer import GridWriter
 from .database.db import InterpolationDB
 
@@ -84,41 +84,8 @@ class RuntimeContext:
         else:
             logger.info("Gapfiller initialized")
 
-        ## Interpolation Regions
-        region_config = config.get('interpolation_regions')
-        interpolation_regions = InterpolationRegions(**region_config) if region_config is not None else None
-        if region_config is None:
-            logger.info("No interpolation regions specified.")
-        else:
-            logger.info('Interpolation regions initialized')
-
-        ## Cross validation
-        cv_config = config.get('cross_validation')
-        cross_validator = CrossValidator(**cv_config) if cv_config is not None else None
-        if cv_config is None:
-            logger.info('No cross validation configuration provided. Cross validation will be skipped')
-        else:
-            logger.info('Cross validator initialized.')
-
-        ## Vertical Model
-        vertical_model = VerticalModel(**config.get('vertical_model', {}))
-        logger.info("Vertical model initialized")
-
-        ## Residual Model
-        residual_config = config.get('residual_model')
-        residual_model = ResidualModel(**residual_config) if residual_config is not None else None
-        if residual_config is None:
-            logger.info("No residual model configuration provided. Residuals will not be interpolated")
-        else:
-            logger.info('Residual Model initialized')
-
         ## Interpolator
-        self.interpolator = Interpolator(
-            vertical_model = vertical_model,
-            residual_model = residual_model,
-            regions = interpolation_regions,
-            cross_validator = cross_validator
-        )
+        self.interpolator = Interpolator.from_config(config['interpolation'])
 
         ## Grid Writer
         output_config = config.get('output')

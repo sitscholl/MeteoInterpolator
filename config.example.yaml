@@ -19,8 +19,10 @@ aoi:
   maxx: 12
   maxy: 47
 
-vertical_model:
-  fit_intercept: True
+interpolation:
+  vertical_model:
+    type: linear
+    fit_intercept: True
 
 output:
   format: tiff
