@@ -148,3 +148,51 @@ class NonLinearVerticalModel(BaseVerticalModel):
             params.h0,
             params.h1,
         )
+
+if __name__ == '__main__':
+
+    import matplotlib.pyplot as plt
+
+    rng = np.random.default_rng(42)
+
+    # Synthetic stations spanning a valley floor, inversion layer, and free atmosphere.
+    X = np.array(
+        [240, 360, 520, 690, 830, 980, 1160, 1340, 1510, 1730, 1980, 2260, 2580, 2950, 3380],
+        dtype=float,
+    )
+    true_params = NonLinearProfileParams(
+        t0=5.0,
+        gamma=0.0055,
+        a=4.5,
+        h0=650.0,
+        h1=1750.0,
+    )
+    y_true = NonLinearVerticalModel._calculate_nonlinear_profile(
+        elevation=X,
+        t0=true_params.t0,
+        gamma=true_params.gamma,
+        a=true_params.a,
+        h0=true_params.h0,
+        h1=true_params.h1,
+    )
+    y = y_true + rng.normal(loc=0.0, scale=0.35, size=X.shape)
+
+    model = NonLinearVerticalModel()
+
+    model.fit(X, y)
+
+    x_pred = np.arange(np.min(X), np.max(X), step = 1)
+    preds = model.predict(x_pred)
+
+    fig, ax = plt.subplots()
+    ax.scatter(y, X, label="Synthetic stations", color="tab:blue")
+    ax.plot(
+        NonLinearVerticalModel._calculate_nonlinear_profile(x_pred, *true_params.as_array()),
+        x_pred,
+        label="True profile",
+        color="tab:green",
+    )
+    ax.plot(preds, x_pred, label="Fitted profile", color="tab:orange")
+    ax.set_ylabel("Elevation [m]")
+    ax.set_xlabel("Temperature [deg C]")
+    ax.legend()
