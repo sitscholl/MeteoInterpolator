@@ -44,15 +44,7 @@ class RuntimeContext:
     def initialize_runtime(self, config: dict):
 
         ## General
-        general_config = config['general']
-        stations = general_config.get('stations')
-        if stations is None:
-            self.stations = None
-        elif isinstance(stations, (list, tuple)):
-            self.stations = list(stations)
-        else:
-            self.stations = [stations]
-            
+        general_config = config['general']            
         self.timezone = general_config['timezone']
         self.require_stations_in_aoi = general_config.get('require_stations_in_aoi', True)
        
@@ -63,10 +55,18 @@ class RuntimeContext:
         self.base_grid = BaseGrid(**config['base_grid'], aoi = self.aoi)
         logger.info(f"Initialized Base grid {self.base_grid}")
 
-        ## Meteo Loader
-        handler_config = dict(config['meteo_input'])
-        handler_name = handler_config.pop('handler')
-        self.meteo_loader = BaseMeteoHandler.create(handler_name, target_timezone = self.timezone, **handler_config)
+        ## Meteo Data
+        meteo_data_config = dict(config['meteo_data'])
+        stations = meteo_data_config.get('stations')
+        if stations is None:
+            self.stations = None
+        elif isinstance(stations, (list, tuple)):
+            self.stations = list(stations)
+        else:
+            self.stations = [stations]
+
+        handler_name = meteo_data_config.pop('handler')
+        self.meteo_loader = BaseMeteoHandler.create(handler_name, target_timezone = self.timezone, **meteo_data_config)
         logger.info(f'Initialized {handler_name} meteo loader')
 
         ## Meteo resampler
