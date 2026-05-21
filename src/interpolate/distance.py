@@ -1,116 +1,198 @@
-import xarray as xr
-from xrspatial import proximity
+from collections.abc import Hashable, Sequence
+
 import numpy as np
+import xarray as xr
+from scipy.sparse import coo_array
+from scipy.sparse.csgraph import dijkstra
+
 
 class DistanceCalculator:
-    def __init__(
-        self
-        ):
+    def __init__(self):
         pass
 
-    def _get_grid_coords(self, x_coords: list[float], y_coords: list[float], grid: xr.DataArray):
-        grid_coords = grid.sel(dict(x = x_coords, y = y_coords), method = 'nearest')
-        if grid_coords.empty:
-            raise ValueError("No source coordinates fall within the grid.")
-        return grid_coords.x.values, grid_coords.y.values
+    def _validate_dem(self, dem: xr.DataArray) -> xr.DataArray:
+        if "y" not in dem.dims:
+            raise ValueError(
+                f"Missing y dimension 'y'. Make sure the dem has the vertical dimension named y. Got {dem.dims}"
+            )
+        if "x" not in dem.dims:
+            raise ValueError(
+                f"Missing x dimension 'x'. Make sure the dem has the horizontal dimension named x. Got {dem.dims}"
+            )
+        if dem.ndim != 2:
+            raise ValueError(f"Expected a 2D DEM with dimensions ('y', 'x'). Got shape {dem.shape}")
 
-    def _prepare_source_grid(self, grid_x, grid_y, grid):
-        ##transform base grid to grid where source pixels have a value of 1 and others 0
-        source_grid = grid.copy()
-        return xr.where((source_grid.coords["y"] == grid_y) & (source_grid.coords["x"] == grid_x), 1, 0)
+        dem = dem.transpose("y", "x")
+
+        x = dem.coords["x"].values
+        y = dem.coords["y"].values
+        if x.ndim != 1 or y.ndim != 1:
+            raise ValueError("Only rectilinear DEM grids with 1D x and y coordinates are supported.")
+        if len(x) != dem.sizes["x"] or len(y) != dem.sizes["y"]:
+            raise ValueError("DEM x/y coordinate lengths do not match the DEM dimensions.")
+
+        return dem
+
+    def _nearest_cell_indices(
+        self,
+        dem: xr.DataArray,
+        x_coords: Sequence[float],
+        y_coords: Sequence[float],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if len(x_coords) != len(y_coords):
+            raise ValueError(
+                f"The number of x and y coordinates must match. Got {len(x_coords)} vs {len(y_coords)}"
+            )
+        if len(x_coords) == 0:
+            raise ValueError("At least one source coordinate is required.")
+
+        x = dem.coords["x"].values
+        y = dem.coords["y"].values
+        x_coords = np.asarray(x_coords, dtype=float)
+        y_coords = np.asarray(y_coords, dtype=float)
+
+        x_idx = np.abs(x[None, :] - x_coords[:, None]).argmin(axis=1)
+        y_idx = np.abs(y[None, :] - y_coords[:, None]).argmin(axis=1)
+
+        dem_values = np.asarray(dem.values, dtype=float)
+        invalid_sources = ~np.isfinite(dem_values[y_idx, x_idx])
+        if invalid_sources.any():
+            invalid = np.flatnonzero(invalid_sources).tolist()
+            raise ValueError(f"Source coordinates snap to invalid DEM cells at point indices: {invalid}")
+
+        return y_idx, x_idx
+
+    def _point_ids(
+        self,
+        n_points: int,
+        point_ids: Sequence[Hashable] | None,
+    ) -> list[Hashable]:
+        if point_ids is None:
+            return list(range(n_points))
+        if len(point_ids) != n_points:
+            raise ValueError(
+                f"If supplied, the number of ids must correspond to the number of points. Got {len(point_ids)} vs {n_points}"
+            )
+        return list(point_ids)
+
+    def _build_terrain_graph(self, dem: xr.DataArray, lam: float) -> coo_array:
+        z = np.asarray(dem.values, dtype=float)
+        y = np.asarray(dem.coords["y"].values, dtype=float)
+        x = np.asarray(dem.coords["x"].values, dtype=float)
+
+        n_y, n_x = z.shape
+        n_cells = n_y * n_x
+        valid = np.isfinite(z)
+
+        row_parts = []
+        col_parts = []
+        cost_parts = []
+
+        for row_offset, col_offset in ((0, 1), (1, 0), (1, 1), (1, -1)):
+            row_start = max(0, -row_offset)
+            row_stop = n_y - max(0, row_offset)
+            col_start = max(0, -col_offset)
+            col_stop = n_x - max(0, col_offset)
+
+            rows, cols = np.mgrid[row_start:row_stop, col_start:col_stop]
+            next_rows = rows + row_offset
+            next_cols = cols + col_offset
+
+            edge_mask = valid[rows, cols] & valid[next_rows, next_cols]
+            if not edge_mask.any():
+                continue
+
+            source = (rows[edge_mask] * n_x + cols[edge_mask]).ravel()
+            target = (next_rows[edge_mask] * n_x + next_cols[edge_mask]).ravel()
+
+            horizontal = np.hypot(
+                x[next_cols[edge_mask]] - x[cols[edge_mask]],
+                y[next_rows[edge_mask]] - y[rows[edge_mask]],
+            )
+            vertical = z[next_rows[edge_mask], next_cols[edge_mask]] - z[rows[edge_mask], cols[edge_mask]]
+            cost = np.sqrt(horizontal**2 + (lam * vertical) ** 2)
+
+            row_parts.extend((source, target))
+            col_parts.extend((target, source))
+            cost_parts.extend((cost, cost))
+
+        if not row_parts:
+            return coo_array((n_cells, n_cells), dtype=float)
+
+        graph_rows = np.concatenate(row_parts)
+        graph_cols = np.concatenate(col_parts)
+        graph_costs = np.concatenate(cost_parts)
+
+        return coo_array((graph_costs, (graph_rows, graph_cols)), shape=(n_cells, n_cells))
 
     def calculate_euclidean_distance(
         self,
-        dem: xr.DataArray, 
-        x_coords: list[float], 
-        y_coords: list[float], 
-        ):
-
-        if 'y' not in dem.coords:
-            raise ValueError(f"Missing y dimension 'y'. Make sure the dem has the vertical coordinate named y. Got {dem.coords}")
-        if 'x' not in dem.coords:
-            raise ValueError(f"Missing x dimension 'x'. Make sure the dem has the horizontal coordinate named x. Got {dem.coords}")
-        
-        grid_x, grid_y = self._get_grid_coords(x_coords, y_coords, dem)
-        source_grid = self._prepare_source_grid(grid_x, grid_y, dem)
-        euc_dist = proximity(source_grid)
-
-        return euc_dist
+        dem: xr.DataArray,
+        x_coords: Sequence[float],
+        y_coords: Sequence[float],
+        point_ids: Sequence[Hashable] | None = None,
+    ) -> xr.DataArray:
+        distances = self.calculate_non_euclidean_distance(
+            dem=dem,
+            x_coords=x_coords,
+            y_coords=y_coords,
+            point_ids=point_ids,
+            lam_values=[0],
+        )
+        return distances.sel(lam_value=0, drop=True)
 
     def calculate_non_euclidean_distance(
         self,
-        dem: xr.DataArray, 
-        x_coords: list[float], 
-        y_coords: list[float], 
-        point_ids: list[int] | None = None,
-        lam_values: list[float] = [0, 25, 50, 75, 100, 150, 200]
-    ):
-        
-        euc_dist = self.calculate_euclidean_distance(dem, x_coords, y_coords)
-        grid_x, grid_y = self._get_grid_coords(x_coords, y_coords, dem)
+        dem: xr.DataArray,
+        x_coords: Sequence[float],
+        y_coords: Sequence[float],
+        point_ids: Sequence[Hashable] | None = None,
+        lam_values: Sequence[float] = (0, 25, 50, 75, 100, 150, 200),
+    ) -> xr.DataArray:
+        dem = self._validate_dem(dem)
+        y_idx, x_idx = self._nearest_cell_indices(dem, x_coords, y_coords)
+        ids = self._point_ids(len(x_idx), point_ids)
+        lam_values = list(lam_values)
 
-        if point_ids is not None:
+        if len(lam_values) == 0:
+            raise ValueError("At least one lambda value is required.")
+        if any(lam < 0 for lam in lam_values):
+            raise ValueError("Lambda values must be non-negative.")
 
-            if len(point_ids) != len(x_coords):
-                raise ValueError(f"If supplied, the number of ids must correspond to the number of points. Got {len(point_ids)} vs {len(x_coords)}")
+        n_y = dem.sizes["y"]
+        n_x = dem.sizes["x"]
+        source_indices = y_idx * n_x + x_idx
 
-            grid_x = xr.DataArray(data = grid_x, coords = {'id': point_ids})
-            grid_y = xr.DataArray(data = grid_y, coords = {'id': point_ids})
-
-        results = []
+        distance_fields = []
         for lam in lam_values:
-            points_elev = dem.sel(y = grid_y, x = grid_x).values
-
-            neuc_dist = euc_dist + np.sqrt((lam * (dem - points_elev))**2)
-            neuc_dist = neuc_dist.where(neuc_dist > 0)
-
-            #todo: preserve ids of x and y coords somehow
-            neuc_dist = neuc_dist.assign_coords(
-                lam_value = lam
+            graph = self._build_terrain_graph(dem, lam=float(lam)).tocsr()
+            distances = dijkstra(
+                csgraph=graph,
+                directed=False,
+                indices=source_indices,
+                return_predecessors=False,
             )
+            distances = np.asarray(distances, dtype=float).reshape((len(ids), n_y, n_x))
+            distances[~np.isfinite(distances)] = np.nan
+            distance_fields.append(distances)
 
-            results.append(neuc_dist)
-        
-        return xr.merge(results)
+        data = np.stack(distance_fields, axis=0)
 
-
-
-    # #lam_values = np.arange(0, 210, 20)
-    # lam_values = [0, 25, 50, 75, 100, 150, 200]
-    # ids_distance = gpd.overlay(st_info, aoi_square, how = 'intersection')['st_id'].unique()
-    # ids_distance = [i for i in ids_distance if i in st_data['st_id'].unique()]
-    
-    
-    # ds = xr.Dataset(
-    #     data_vars = {f'l{l}': xr.DataArray(np.nan, dims = ('y', 'x', 'st_id'), coords=dict(x=dem_clip.x.values, y=dem_clip.y.values, st_id = ids_distance)) for l in lam_values},
-    #     coords=dict(x=dem_clip.x.values, y=dem_clip.y.values, st_id = ids_distance)
-    # )
-
-    # i = 0
-    # for sid in ids_distance:
-
-    #     clear_output(wait = True)
-
-    #     st_coords = st_info.loc[st_info['st_id'] == sid, 'geometry'].drop_duplicates()
-    #     st_x, st_y = st_coords.x.values, st_coords.y.values
-
-    #     euc_source = dem_square.copy()
-    #     pcoords = euc_source.sel(dict(y = st_y, x = st_x), method = 'nearest')
-    #     px, py = pcoords.x.values, pcoords.y.values
-    #     euc_source = xr.where((euc_source.coords["y"] == py) & (euc_source.coords["x"] == px), 1, 0)
-
-    #     st_elev = dem_square.sel(y = st_y, x = st_x, method = 'nearest').values
-
-    #     euc_dist = proximity(euc_source)
-    #     euc_dist = euc_dist.rio.clip(aoi.geometry, aoi.crs)
-
-    #     for lam in lam_values:
-    #         neuc_dist = euc_dist + np.sqrt((lam * (dem_clip - st_elev))**2)
-    #         neuc_dist = neuc_dist.where(neuc_dist > 0)
-    #         ds[f'l{lam}'].loc[dict(st_id = sid)] = neuc_dist
-
-    #     i += 1
-    #     perc = np.round((i/len(ids_distance)) * 100, 2)
-    #     print(f"Current progress ({sid}): {perc}%")
-        
-    # ds.to_netcdf(lambda_arrays_path)
+        return xr.DataArray(
+            data,
+            dims=("lam_value", "id", "y", "x"),
+            coords={
+                "lam_value": lam_values,
+                "id": ids,
+                "y": dem.coords["y"],
+                "x": dem.coords["x"],
+            },
+            name="non_euclidean_distance",
+            attrs={
+                "description": (
+                    "Simplified Frei-style generalized distance computed as shortest paths over an "
+                    "8-neighbor terrain graph with edge costs sqrt(horizontal_distance^2 + "
+                    "(lambda * elevation_difference)^2)."
+                )
+            },
+        )
