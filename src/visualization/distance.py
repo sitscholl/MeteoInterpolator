@@ -110,6 +110,9 @@ def plot_distance_panel(
     cmap: str = "viridis",
     distance_levels: int = 12,
     dem_levels: int = 14,
+    wspace: float = 0.01,
+    hspace: float = 0.18,
+    colorbar_pad: float = 0.05,
 ):
 
     if lam_values is None:
@@ -130,7 +133,7 @@ def plot_distance_panel(
     if figsize is None:
         figsize = (5.0 * ncols, 4.6 * nrows)
 
-    fig, axes = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False, constrained_layout=True)
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False, constrained_layout=False)
     mesh = None
 
     for ax, lam, field in zip(axes.ravel(), lam_values, fields):
@@ -149,10 +152,18 @@ def plot_distance_panel(
 
     for ax in axes.ravel()[len(lam_values):]:
         ax.set_visible(False)
-    
-    if mesh is not None:
-        cbar = fig.colorbar(mesh, ax=axes.ravel().tolist(), shrink=0.6, location = 'bottom')
-        cbar.set_label("Generalized distance")
 
     fig.suptitle(f"Distance fields for station {point_id}")
+    fig.subplots_adjust(left=0.03, right=0.97, top=0.9, bottom=0.13, wspace=wspace, hspace=hspace)
+
+    if mesh is not None:
+        cbar = fig.colorbar(
+            mesh,
+            ax=axes.ravel()[:len(lam_values)].tolist(),
+            shrink=0.6,
+            location="bottom",
+            pad=colorbar_pad,
+        )
+        cbar.set_label("Generalized distance")
+
     return fig, axes
