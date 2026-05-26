@@ -1,13 +1,22 @@
 from collections.abc import Hashable, Sequence
+from dataclasses import dataclass
 
 import numpy as np
 import xarray as xr
-from scipy.sparse import coo_array
+from scipy.sparse import coo_array, csr_array
 from scipy.sparse.csgraph import dijkstra
 
 import logging
 
 logger = logging.getLogger(__name__)
+
+@dataclass(frozen=True)
+class _TerrainGraphEdges:
+    n_cells: int
+    rows: np.ndarray
+    cols: np.ndarray
+    horizontal: np.ndarray
+    vertical: np.ndarray
 
 def _validate_dem(dem: xr.DataArray) -> xr.DataArray:
     if not isinstance(dem, xr.DataArray):
@@ -35,6 +44,16 @@ def _validate_dem(dem: xr.DataArray) -> xr.DataArray:
         raise ValueError("DEM x/y coordinate lengths do not match the DEM dimensions.")
 
     return dem
+
+def _validate_connectivity(connectivity: int) -> int:
+    if connectivity not in (4, 8):
+        raise ValueError(f"Connectivity must be either 4 or 8. Got {connectivity}")
+    return connectivity
+
+def _neighbor_offsets(connectivity: int) -> tuple[tuple[int, int], ...]:
+    if connectivity == 4:
+        return ((0, 1), (1, 0))
+    return ((0, 1), (1, 0), (1, 1), (1, -1))
 
 def _nearest_cell_indices(
     dem: xr.DataArray,
@@ -76,7 +95,8 @@ def _point_ids(
         )
     return list(point_ids)
 
-def _build_terrain_graph(dem: xr.DataArray, lam: float) -> coo_array:
+def _build_terrain_graph_edges(dem: xr.DataArray, connectivity: int = 8) -> _TerrainGraphEdges:
+    connectivity = _validate_connectivity(connectivity)
     z = np.asarray(dem.values, dtype=float)
     y = np.asarray(dem.coords["y"].values, dtype=float)
     x = np.asarray(dem.coords["x"].values, dtype=float)
@@ -87,9 +107,10 @@ def _build_terrain_graph(dem: xr.DataArray, lam: float) -> coo_array:
 
     row_parts = []
     col_parts = []
-    cost_parts = []
+    horizontal_parts = []
+    vertical_parts = []
 
-    for row_offset, col_offset in ((0, 1), (1, 0), (1, 1), (1, -1)):
+    for row_offset, col_offset in _neighbor_offsets(connectivity):
         row_start = max(0, -row_offset)
         row_stop = n_y - max(0, row_offset)
         col_start = max(0, -col_offset)
@@ -111,26 +132,39 @@ def _build_terrain_graph(dem: xr.DataArray, lam: float) -> coo_array:
             y[next_rows[edge_mask]] - y[rows[edge_mask]],
         )
         vertical = z[next_rows[edge_mask], next_cols[edge_mask]] - z[rows[edge_mask], cols[edge_mask]]
-        cost = np.sqrt(horizontal**2 + (lam * vertical) ** 2)
 
-        row_parts.extend((source, target))
-        col_parts.extend((target, source))
-        cost_parts.extend((cost, cost))
+        row_parts.append(source)
+        col_parts.append(target)
+        horizontal_parts.append(horizontal)
+        vertical_parts.append(vertical)
 
     if not row_parts:
-        return coo_array((n_cells, n_cells), dtype=float)
+        return _TerrainGraphEdges(
+            n_cells=n_cells,
+            rows=np.array([], dtype=np.int64),
+            cols=np.array([], dtype=np.int64),
+            horizontal=np.array([], dtype=float),
+            vertical=np.array([], dtype=float),
+        )
 
-    graph_rows = np.concatenate(row_parts)
-    graph_cols = np.concatenate(col_parts)
-    graph_costs = np.concatenate(cost_parts)
+    return _TerrainGraphEdges(
+        n_cells=n_cells,
+        rows=np.concatenate(row_parts),
+        cols=np.concatenate(col_parts),
+        horizontal=np.concatenate(horizontal_parts),
+        vertical=np.concatenate(vertical_parts),
+    )
 
-    return coo_array((graph_costs, (graph_rows, graph_cols)), shape=(n_cells, n_cells))
+def _build_terrain_graph(edges: _TerrainGraphEdges, lam: float) -> csr_array:
+    cost = np.sqrt(edges.horizontal**2 + (lam * edges.vertical) ** 2)
+    return coo_array((cost, (edges.rows, edges.cols)), shape=(edges.n_cells, edges.n_cells)).tocsr()
 
 def calculate_euclidean_distance(
     dem: xr.DataArray,
     x_coords: Sequence[float],
     y_coords: Sequence[float],
     point_ids: Sequence[Hashable] | None = None,
+    connectivity: int = 8,
 ) -> xr.DataArray:
     distances = calculate_non_euclidean_distance(
         dem=dem,
@@ -138,6 +172,7 @@ def calculate_euclidean_distance(
         y_coords=y_coords,
         point_ids=point_ids,
         lam_values=[0],
+        connectivity=connectivity,
     )
     return distances.sel(lam_value=0, drop=True)
 
@@ -147,8 +182,10 @@ def calculate_non_euclidean_distance(
     y_coords: Sequence[float],
     point_ids: Sequence[Hashable] | None = None,
     lam_values: Sequence[float] = (0, 25, 50, 75, 100, 150, 200),
+    connectivity: int = 8,
 ) -> xr.DataArray:
     dem = _validate_dem(dem)
+    connectivity = _validate_connectivity(connectivity)
     y_idx, x_idx = _nearest_cell_indices(dem, x_coords, y_coords)
     ids = _point_ids(len(x_idx), point_ids)
     lam_values = list(lam_values)
@@ -162,10 +199,13 @@ def calculate_non_euclidean_distance(
     n_x = dem.sizes["x"]
     source_indices = y_idx * n_x + x_idx
 
+    logger.debug("Building %s-neighbor terrain graph edges", connectivity)
+    edges = _build_terrain_graph_edges(dem, connectivity=connectivity)
+
     distance_fields = []
     for lam in lam_values:
         logger.debug("Building terrain graph for lam value %s", lam)
-        graph = _build_terrain_graph(dem, lam=float(lam)).tocsr()
+        graph = _build_terrain_graph(edges, lam=float(lam))
 
         logger.debug("Calculating non-euclidean distance for lam value %s", lam)
         distances = dijkstra(
@@ -193,9 +233,10 @@ def calculate_non_euclidean_distance(
         attrs={
             "description": (
                 "Simplified Frei-style generalized distance computed as shortest paths over an "
-                "8-neighbor terrain graph with edge costs sqrt(horizontal_distance^2 + "
+                f"{connectivity}-neighbor terrain graph with edge costs sqrt(horizontal_distance^2 + "
                 "(lambda * elevation_difference)^2)."
-            )
+            ),
+            "connectivity": connectivity,
         },
     )
 
@@ -206,10 +247,11 @@ if __name__ == '__main__':
 
     dem_file = r"data/dem_envelope_100m.tif"
     dem = xr.open_dataset(dem_file).band_data.squeeze(drop = True)
-    x, y = (638312,5164307)
-    
+    x = [638312, 629287]
+    y = [5164307, 5167218]
+
     non_euc_distance = calculate_non_euclidean_distance(
-        dem, [x], [y]
+        dem, x, y
     )
     
     for (lam_val, point_id), data in non_euc_distance.groupby(['lam_value', 'id']):
