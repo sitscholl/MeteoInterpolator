@@ -27,24 +27,11 @@ def _plot_distance_field_on_axis(
     vmin: float | None,
     vmax: float | None,
     distance_levels: int,
-    dem_levels: int,
 ):
     x = field.coords["x"].values
     y = field.coords["y"].values
 
     mesh = ax.pcolormesh(x, y, field.values, shading="auto", cmap=cmap, vmin=vmin, vmax=vmax)
-
-    if dem is not None and dem_levels > 0:
-        dem = dem.transpose("y", "x")
-        ax.contour(
-            dem.coords["x"].values,
-            dem.coords["y"].values,
-            dem.values,
-            levels=dem_levels,
-            colors="0.25",
-            linewidths=0.35,
-            alpha=0.35,
-        )
 
     if distance_levels > 0:
         values = np.asarray(field.values, dtype=float)
@@ -62,8 +49,8 @@ def _plot_distance_field_on_axis(
 
     ax.scatter(station_x, station_y, s=36, c="black", edgecolors="white", linewidths=0.8, zorder=5)
     ax.set_aspect("equal", adjustable="box")
-    ax.set_xlabel("x")
-    ax.set_ylabel("y")
+    ax.set_xticks([])
+    ax.set_yticks([])
     return mesh
 
 
@@ -100,7 +87,6 @@ def plot_distance_field(
         vmin=vmin,
         vmax=vmax,
         distance_levels=distance_levels,
-        dem_levels=dem_levels,
     )
     ax.set_title(f"Station {point_id}, lambda={lam_value}")
 
@@ -158,15 +144,14 @@ def plot_distance_panel(
             vmin=vmin,
             vmax=vmax,
             distance_levels=distance_levels,
-            dem_levels=dem_levels,
         )
         ax.set_title(f"lambda={lam}")
 
     for ax in axes.ravel()[len(lam_values):]:
         ax.set_visible(False)
-
+    
     if mesh is not None:
-        cbar = fig.colorbar(mesh, ax=axes.ravel().tolist(), shrink=0.85)
+        cbar = fig.colorbar(mesh, ax=axes.ravel().tolist(), shrink=0.6, location = 'bottom')
         cbar.set_label("Generalized distance")
 
     fig.suptitle(f"Distance fields for station {point_id}")
