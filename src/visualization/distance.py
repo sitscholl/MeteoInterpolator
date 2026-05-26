@@ -131,7 +131,7 @@ def plot_distance_panel(
     ncols = min(max(1, ncols), len(lam_values))
     nrows = int(np.ceil(len(lam_values) / ncols))
     if figsize is None:
-        figsize = (5.0 * ncols, 4.6 * nrows)
+        figsize = (4.6 * ncols, 4.6 * nrows)
 
     fig, axes = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False, constrained_layout=False)
     mesh = None
@@ -160,7 +160,7 @@ def plot_distance_panel(
         cbar = fig.colorbar(
             mesh,
             ax=axes.ravel()[:len(lam_values)].tolist(),
-            shrink=0.6,
+            shrink=0.4,
             location="bottom",
             pad=colorbar_pad,
         )
