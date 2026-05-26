@@ -420,21 +420,3 @@ def calculate_non_euclidean_distance(
             "max_visibility_distance": max_visibility_distance,
         },
     )
-
-if __name__ == '__main__':
-    import rioxarray
-
-    logging.basicConfig(level = logging.DEBUG, force = True)
-
-    dem_file = r"data/dem_envelope_1000m.tif"
-    max_visibility_distance = 1000
-    dem = xr.open_dataset(dem_file).band_data.squeeze(drop = True)
-    x = [638312, 629287]
-    y = [5164307, 5167218]
-
-    non_euc_distance = calculate_non_euclidean_distance(
-        dem, x, y, max_visibility_distance = max_visibility_distance
-    )
-    
-    for (lam_val, point_id), data in non_euc_distance.groupby(['lam_value', 'id']):
-        data.transpose('stacked_lam_value_id', 'y', 'x').rio.to_raster(f"data/thrash/non_euc_distance_{lam_val}_point_{point_id}.tif")
