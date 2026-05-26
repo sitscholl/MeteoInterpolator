@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 def _validate_dem(dem: xr.DataArray) -> xr.DataArray:
     if not isinstance(dem, xr.DataArray):
-        raise ValueError(
+        raise TypeError(
             f"dem should be a DataArray. Got {type(dem)}"
         )
     if "y" not in dem.dims:
@@ -164,8 +164,10 @@ def calculate_non_euclidean_distance(
 
     distance_fields = []
     for lam in lam_values:
-        logger.debug(f"Calculating non-euclidean distance for lam value {lam}")
+        logger.debug("Building terrain graph for lam value %s", lam)
         graph = _build_terrain_graph(dem, lam=float(lam)).tocsr()
+
+        logger.debug("Calculating non-euclidean distance for lam value %s", lam)
         distances = dijkstra(
             csgraph=graph,
             directed=False,
@@ -202,7 +204,7 @@ if __name__ == '__main__':
 
     logging.basicConfig(level = logging.DEBUG, force = True)
 
-    dem_file = r"data/dem_envelope_1000m.tif"
+    dem_file = r"data/dem_envelope_100m.tif"
     dem = xr.open_dataset(dem_file).band_data.squeeze(drop = True)
     x, y = (638312,5164307)
     
