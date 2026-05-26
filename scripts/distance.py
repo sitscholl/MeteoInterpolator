@@ -15,11 +15,14 @@ logger = logging.getLogger(__name__)
 
 
 def main():
+    ##For a mountainside point use:
+    #uv run python -m scripts.distance -x 629287 -y 5167218
+    ##
     logging.basicConfig(level=logging.INFO, force=True)
 
     parser = argparse.ArgumentParser(description="Generate distance plots.")
-    parser.add_argument("-x", "--xcoord", default = 638312, help = 'x-coordinate in the crs of the dem')
-    parser.add_argument("-y", "--ycoord", default = 5164307, help = 'y-coordinate in the crs of the dem')
+    parser.add_argument("-x", "--xcoord", type=float, default = 638312, help = 'x-coordinate in the crs of the dem')
+    parser.add_argument("-y", "--ycoord", type=float, default = 5164307, help = 'y-coordinate in the crs of the dem')
     parser.add_argument("-p", "--pointid", default = "Source Point", help = 'Id of the source point.')
     parser.add_argument("-r", "--res", default = 1000, help = 'Resolution of dem')
     parser.add_argument('-d', "--maxd", default = None, help = 'Maximum distance for the visibility line.')
@@ -27,6 +30,7 @@ def main():
     args = parser.parse_args()
 
     start_time = datetime.now()
+    logger.info(f"Launching script for point ({args.xcoord, args.ycoord})")
 
     dem_file = Path(f"data/dem_envelope_{args.res}m.tif")
 
