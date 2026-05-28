@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class DistanceField:
     distance_type: str
     data: xr.DataArray | None
-    _required_dims: ClassVar[tuple[str, ...]] = ("lam_value", "id", "y", "x")
+    _required_dims: ClassVar[tuple[str, ...]] = ("id", "y", "x")
 
     @classmethod
     def from_list(cls, lst: list["DistanceField"]):
