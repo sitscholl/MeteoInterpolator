@@ -4,6 +4,7 @@ from pathlib import Path
 from shutil import rmtree
 
 import xarray as xr
+import numpy as np
 
 from .base import BaseResidualModel
 from ..distance import calculate_non_euclidean_distance
@@ -16,7 +17,8 @@ class InverseDistanceWeighting(BaseResidualModel):
         connectivity_type: int = 4,
         lam_values: Sequence[float] | None = None,
         max_visibility_distance: float | None = None,
-        cache_directory: str | None = None
+        cache_directory: str | None = None,
+        neighbours: int = 5
         ):
 
         if connectivity_type not in [4, 8]:
@@ -42,6 +44,8 @@ class InverseDistanceWeighting(BaseResidualModel):
             cache_directory.parent.mkdir(exist_ok = True, parents = True)
             logger.debug(f"Distance fields will be cached at {cache_directory}")
         self.cache_directory = cache_directory
+
+        self.neighbours = neighbours
 
     def key(self):
         return 'idw'
@@ -114,3 +118,57 @@ class InverseDistanceWeighting(BaseResidualModel):
 
         return results
 
+    def _validate_input_array(self, array: xr.DataArray, name: str, spatial: bool = False):
+        if not isinstance(array, xr.DataArray):
+            raise ValueError(f'{name} input should be an xarray DataArray. Got {type(array)}')
+        if 'id' not in array.dims or array.sizes['id'] == 0:
+            raise ValueError(f"{name} input must have an id dimension with length > 0. Got {array.dims}")
+
+        if spatial:
+            if 'y' not in array.dims:
+                raise ValueError(f"Spatial grid {name} requires a y dimension. Got {array.dims}")
+            if 'x' not in array.dims:
+                raise ValueError(f"Spatial grid requireds an x dimension. Got {array.dims}")
+
+    def interpolate(self, y: xr.DataArray, distance_fields: xr.DataArray):
+        
+        self._validate_input_array(y, name = 'y')
+        self._validate_input_array(distance_fields, name = 'distance_fields', spatial = True)
+
+        common_ids = set(y.id.values).intersection(distance_fields.id.values)
+        if len(common_ids) == 0:
+            logger.warning("No common ids between y input and distance_fields array. y-values cannot be interpolated")
+            return None
+
+        missing_ids = set(y.id.values) - distance_fields.id.values
+        if len(missing_ids) > 0:
+            logger.warning(f"No distance fields for the following ids were provided. They will not be considered in the interpolation: {missing_ids}")
+        
+        y = y.sel(id = common_ids)
+        distance_fields_start = distance_fields.sel(id = common_ids).copy()
+        distance_fields_start = distance_fields_start.where(distance_fields_start > 0) #set source grid pixels to np.nan
+        
+        residual_factor = (y/distance_fields_start**2)
+        
+        coords_dict = dict(x=distance_fields.x.values, y=distance_fields.y.values)
+        w_tot = xr.DataArray(0.0, dims = ('y', 'x'), coords=coords_dict)
+        R = xr.DataArray(0.0, dims = ('y', 'x'), coords=coords_dict)
+        
+        for i in range(self.neighbours):
+            #Get index of minimum value for each pixel
+            arr_idx = distance_fields_start.fillna(np.inf).idxmin('st_id')
+            ##Add step that clips to aoi, because pixels with nan values in arr_start are assigned the id of the first station in arr_start
+
+            #For each pixel extract minimum distance over all stations
+            arr_min = distance_fields_start.sel(st_id = arr_idx).drop('st_id')
+
+            #For each pixel extract the residual factor that corresponds to the minimum distance
+            arr_res_sel = residual_factor.sel(st_id = arr_idx).drop('st_id')
+
+            w_tot += (1/(arr_min**2))
+            R += arr_res_sel
+
+            distance_fields_start = distance_fields_start.where(distance_fields_start > arr_min)
+
+        R = (1/w_tot) * R
+        return(R)
