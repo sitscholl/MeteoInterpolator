@@ -1,6 +1,6 @@
 from abc import abstractmethod, ABC
 from dataclasses import dataclass
-from typing import Sequence, Hashable
+from typing import ClassVar, Sequence, Hashable
 from pathlib import Path
 import logging
 from shutil import rmtree
@@ -13,13 +13,20 @@ logger = logging.getLogger(__name__)
 class DistanceField:
     distance_type: str
     data: xr.DataArray | None
-    _required_dims: list[str] = ("lam_value", "id", "y", "x")
+    _required_dims: ClassVar[tuple[str, ...]] = ("lam_value", "id", "y", "x")
 
     @classmethod
     def from_list(cls, lst: list["DistanceField"]):
-        data = xr.concat([i.data for i in lst if i.data is not None], concat_dim = 'id')
+        fields = [i for i in lst if i.data is not None]
+        if not fields:
+            raise ValueError("Cannot create a DistanceField from an empty list.")
+        distance_types = {i.distance_type for i in fields}
+        if len(distance_types) != 1:
+            raise ValueError(f"Cannot combine distance fields with different types: {distance_types}")
+
+        data = xr.concat([i.data for i in fields], dim = 'id')
         return cls(
-            distance_type = lst[0].type,
+            distance_type = fields[0].distance_type,
             data = data
         )
 
@@ -27,6 +34,8 @@ class DistanceField:
         ##make sure the structure of the dataArray corresponds to a fixed schema
         if self.data is not None and not all([i in self.data.dims for i in self._required_dims]):
             raise ValueError(f"Not all required dims {self._required_dims} found in data. Got {self.data.dims}")
+        if self.data is not None:
+            self.data.attrs.setdefault("distance_type", self.distance_type)
 
 class BaseDistanceCalculator(ABC):
 
@@ -37,19 +46,26 @@ class BaseDistanceCalculator(ABC):
             logger.debug(f"Distance fields will be cached at {cache_directory}")
         self.cache_directory = cache_directory
 
-    def _build_cache_path(self, distance_params: dict):
+    def _build_cache_path(self, distance_params: dict | None = None):
         if self.cache_directory is None:
             return None
+        return None
 
     def _initialize_cache(self, distance_fields: DistanceField, cache_path: Path | None = None):
         if cache_path is not None:
 
             if cache_path.exists():
                 raise ValueError(f"Found already existing cache at {cache_path}")
+            if distance_fields.data is None:
+                logger.warning("Cannot initialize distance cache from an empty DistanceField.")
+                return False
 
             try:
                 logger.debug(f"Initializing new distance cache at {cache_path}")
-                distance_fields.data.to_zarr(cache_path)
+                data_name = distance_fields.data.name or "distance"
+                dataset = distance_fields.data.to_dataset(name=data_name)
+                dataset.attrs["distance_type"] = distance_fields.distance_type
+                dataset.to_zarr(cache_path)
                 return True
             except Exception as e:
                 logger.warning(f"Failed to initialize distance cache at {cache_path} with error: {e}")
@@ -59,15 +75,26 @@ class BaseDistanceCalculator(ABC):
         if cache_path is not None and cache_path.exists():
             try:
                 logger.info(f"Loading existing distance cache at {cache_path}")
-                distance_fields = xr.open_zarr(cache_path)
-                return distance_fields
+                dataset = xr.open_zarr(cache_path)
+                data_vars = list(dataset.data_vars)
+                if len(data_vars) != 1:
+                    raise ValueError(f"Expected exactly one cached distance variable. Got {data_vars}")
+                data = dataset[data_vars[0]]
+                distance_type = dataset.attrs.get("distance_type", data.attrs.get("distance_type", data.name))
+                return DistanceField(distance_type = distance_type, data = data)
             except Exception as e:
                 logger.warning(f"Failed to load distance cache with error: {e}. Deleting cache and calculating new distance fields")
                 rmtree(cache_path)
         return None
 
     def _validate_point_in_grid(self, x: float, y:float, grid: xr.DataArray) -> bool:
-        pass
+        grid = self._validate_dem(grid)
+        x_values = grid.coords["x"].values
+        y_values = grid.coords["y"].values
+        return (
+            min(x_values) <= x <= max(x_values)
+            and min(y_values) <= y <= max(y_values)
+        )
 
     @staticmethod
     def _validate_dem(dem: xr.DataArray) -> xr.DataArray:
@@ -113,7 +140,7 @@ class BaseDistanceCalculator(ABC):
         x_coords: Sequence[float],
         y_coords: Sequence[float],
         point_ids: Sequence[Hashable],
-    ) -> xr.DataArray:
+    ) -> DistanceField | None:
 
         point_ids = [str(i) for i in point_ids]
 
@@ -121,20 +148,12 @@ class BaseDistanceCalculator(ABC):
         distance_fields = self._load_cache(cache_path)
 
         if distance_fields is None:
-            results = []
             for x, y, pid in zip(x_coords, y_coords, point_ids):
                 point_in_grid = self._validate_point_in_grid(x, y, dem)
                 if not point_in_grid:
                     logger.warning(f"Point with id {pid} is not within supplied dem. Check crs and dem extent.")
 
-                distance = self.calculate_distance(dem, [x], [y], [pid])
-                results.append(distance)
-
-            if not results:
-                logger.warning("No distance fields could be calculated")
-                return None
-
-            distance_fields = DistanceField.from_list(results)
+            distance_fields = self.calculate_distance(dem, x_coords, y_coords, point_ids)
             self._initialize_cache(distance_fields, cache_path)
 
         return distance_fields

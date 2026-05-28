@@ -27,7 +27,6 @@ class PathDistanceCalculator(BaseDistanceCalculator):
         lam_values: Sequence[float] | None = None,
         max_visibility_distance: float | None = None,
         cache_directory: str | None = None,
-        neighbours: int = 5
         ):
         super().__init__(cache_directory = cache_directory)
 
@@ -53,8 +52,6 @@ class PathDistanceCalculator(BaseDistanceCalculator):
         self.connectivity_type = connectivity_type
         self.lam_values = lam_values
         self.max_visibility_distance = max_visibility_distance
-
-        self.neighbours = neighbours
 
     @property
     def _neighbor_offsets(self) -> tuple[tuple[int, int], ...]:
@@ -250,7 +247,7 @@ class PathDistanceCalculator(BaseDistanceCalculator):
         horizontal_parts = []
         vertical_parts = []
 
-        for row_offset, col_offset in self._neighbor_offsets(self.connectivity_type):
+        for row_offset, col_offset in self._neighbor_offsets:
             row_start = max(0, -row_offset)
             row_stop = n_y - max(0, row_offset)
             col_start = max(0, -col_offset)
