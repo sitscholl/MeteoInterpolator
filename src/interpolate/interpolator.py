@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import logging
 
 from .vertical import BaseVerticalModel
-from .residuals import BaseResidualModel
+from .idw import InverseDistanceWeighting
 from .regions import InterpolationRegions
 from .cv import CrossValidator
 
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class Interpolator:
     vertical_model: BaseVerticalModel
-    residual_model: BaseResidualModel | None = None
+    residual_model: InverseDistanceWeighting | None = None
     regions: InterpolationRegions | None = None
     cross_validator: CrossValidator | None = None
 
@@ -24,14 +24,13 @@ class Interpolator:
         vertical_handler = vertical_config.pop("type")
         vertical_model = BaseVerticalModel.create(vertical_handler, **vertical_config)
 
-        residual_config = config.get('residual_model')
-        if residual_config is None:
-            logger.info("No residual model configuration provided. Residuals will not be interpolated")
+        idw_config = config.get('inverse_distance_weighting')
+        if idw_config is None:
+            logger.info("No inverse distance weigthing configuration provided. Residuals will not be interpolated")
             residual_model = None
         else:
-            residual_config = dict(residual_config)
-            residual_handler = residual_config.pop("type")
-            residual_model = BaseResidualModel.create(residual_handler, **residual_config)
+            idw_config = dict(idw_config)
+            residual_model = InverseDistanceWeighting(**idw_config)
 
         ## Interpolation Regions
         region_config = config.get('interpolation_regions')

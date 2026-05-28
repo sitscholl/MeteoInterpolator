@@ -2,21 +2,16 @@ import logging
 
 import xarray as xr
 
-from .base import BaseResidualModel
-from ..distance import DistanceField
+from .distance import DistanceField
 
 logger = logging.getLogger(__name__)
 
-class InverseDistanceWeighting(BaseResidualModel):
+class InverseDistanceWeighting:
     def __init__(
         self,
         neighbours: int = 5
         ):
         self.neighbours = neighbours
-
-    @classmethod
-    def key(cls):
-        return 'idw'
 
     def _validate_input_array(self, array: xr.DataArray):
         if not isinstance(array, xr.DataArray):

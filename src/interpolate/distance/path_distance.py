@@ -53,6 +53,10 @@ class PathDistanceCalculator(BaseDistanceCalculator):
         self.lam_values = lam_values
         self.max_visibility_distance = max_visibility_distance
 
+    @classmethod
+    def key(cls):
+        return "path_distance"
+
     @property
     def _neighbor_offsets(self) -> tuple[tuple[int, int], ...]:
         if self.connectivity_type == 4:
