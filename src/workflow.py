@@ -8,6 +8,7 @@ import logging
 
 from .runtime import RuntimeContext
 from .meteo.station import MeteoData
+from .interpolate.interpolator import InterpolationJob
 
 logger = logging.getLogger(__name__)
 
@@ -49,36 +50,6 @@ class InterpolationWorkflow:
         else:
             data = data.assign_coords(time=[pd.Timestamp(interp_date)])
         return data
-
-    def _interpolate_param(self, meteo_data: MeteoData, param: str, start: datetime, end: datetime, grid_writer = None):
-
-        results = []
-        for interp_date, X, y in meteo_data.iter_samples(start, end, param):
-            if len(y) < 3:
-                logger.warning(
-                    "Skipping interpolation for parameter %s at %s because only %s station sample(s) are available.",
-                    param,
-                    interp_date,
-                    len(y),
-                )
-                continue
-
-            logger.info(f'Starting interpolation for parameter {param} at {interp_date}')
-
-            interpolated_grid, cv_results = self.context.interpolator.interpolate(
-                X, y, target_grid = self.context.base_grid.data
-                )
-            interpolated_grid = self._prepare_grid_for_output(interpolated_grid, param, interp_date)
-
-            if grid_writer is not None:
-                grid_writer.write(interpolated_grid)
-
-            if self.context.db is not None:
-                self.context.db.store_cv_results(cv_results, workflow_id = self.id, timestamp = self.timestamp)
-
-            results.append(interpolated_grid)
-
-        return results
 
     async def run(self, param: str, start: datetime, end: datetime):       
         self.timestamp = datetime.now()
@@ -135,7 +106,26 @@ class InterpolationWorkflow:
             if self.context.grid_writer is not None
             else None
         )
-        results = self._interpolate_param(meteo_data, param, start, end, grid_writer=grid_writer)
+
+        ## Interpolate
+        interpolation_jobs = meteo_data.build_jobs(start, end, param)
+        results = []
+        for job in interpolation_jobs:
+
+            logger.info('Starting interpolation job %s', job)
+
+            interpolation_result = self.context.interpolator.interpolate(job)
+
+            #todo: do this inside interpolator and directly return prediction with correct structure
+            output_grid = self._prepare_grid_for_output(interpolation_result.prediction, job.parameter, job.timestamp)
+            if grid_writer is not None:
+                grid_writer.write(output_grid)
+
+            if self.context.db is not None:
+                self.context.db.store_cv_results(interpolation_result.cv_results, timestamp = job.timestamp)
+
+            results.append(output_grid)
+
         if len(results) == 0:
             raise ValueError(f"No interpolation results were produced for parameter {param} over period {start} - {end}.")
 
