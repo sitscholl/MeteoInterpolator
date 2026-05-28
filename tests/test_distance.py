@@ -2,7 +2,29 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from src.interpolate.distance import calculate_non_euclidean_distance
+from src.interpolate.distance import PathDistanceCalculator
+
+
+def calculate_path_distance(
+    dem,
+    x_coords,
+    y_coords,
+    point_ids,
+    lam_values,
+    connectivity=4,
+    max_visibility_distance=None,
+):
+    calculator = PathDistanceCalculator(
+        connectivity_type=connectivity,
+        lam_values=lam_values,
+        max_visibility_distance=max_visibility_distance,
+    )
+    return calculator.calculate_fields(
+        dem=dem,
+        x_coords=x_coords,
+        y_coords=y_coords,
+        point_ids=point_ids,
+    ).data
 
 
 def test_connectivity_controls_diagonal_steps():
@@ -12,7 +34,7 @@ def test_connectivity_controls_diagonal_steps():
         coords={"y": [2.0, 1.0, 0.0], "x": [0.0, 1.0, 2.0]},
     )
 
-    distances_4 = calculate_non_euclidean_distance(
+    distances_4 = calculate_path_distance(
         dem,
         x_coords=[0.0],
         y_coords=[1.0],
@@ -20,7 +42,7 @@ def test_connectivity_controls_diagonal_steps():
         lam_values=[0],
         connectivity=4,
     )
-    distances_8 = calculate_non_euclidean_distance(
+    distances_8 = calculate_path_distance(
         dem,
         x_coords=[0.0],
         y_coords=[1.0],
@@ -41,7 +63,7 @@ def test_lambda_penalizes_elevation_changes_between_neighbors():
         coords={"y": [0.0], "x": [0.0, 1.0, 2.0]},
     )
 
-    distances = calculate_non_euclidean_distance(
+    distances = calculate_path_distance(
         dem,
         x_coords=[0.0],
         y_coords=[0.0],
@@ -63,7 +85,7 @@ def test_visibility_edges_allow_paths_above_interjacent_depressions():
         coords={"y": [0.0], "x": [0.0, 1.0, 2.0]},
     )
 
-    surface_distances = calculate_non_euclidean_distance(
+    surface_distances = calculate_path_distance(
         dem,
         x_coords=[0.0],
         y_coords=[0.0],
@@ -71,7 +93,7 @@ def test_visibility_edges_allow_paths_above_interjacent_depressions():
         lam_values=[1],
         connectivity=4,
     )
-    visibility_distances = calculate_non_euclidean_distance(
+    visibility_distances = calculate_path_distance(
         dem,
         x_coords=[0.0],
         y_coords=[0.0],
@@ -93,7 +115,7 @@ def test_visibility_edges_are_limited_by_max_distance():
         coords={"y": [0.0], "x": [0.0, 1.0, 2.0]},
     )
 
-    distances = calculate_non_euclidean_distance(
+    distances = calculate_path_distance(
         dem,
         x_coords=[0.0],
         y_coords=[0.0],
@@ -114,7 +136,7 @@ def test_visibility_equality_counts_as_blocked():
         coords={"y": [0.0, 1.0, 2.0], "x": [0.0, 1.0, 2.0]},
     )
 
-    distances = calculate_non_euclidean_distance(
+    distances = calculate_path_distance(
         dem,
         x_coords=[0.0],
         y_coords=[0.0],
@@ -126,3 +148,34 @@ def test_visibility_equality_counts_as_blocked():
 
     target = dict(lam_value=0, id="station", y=2.0, x=2.0)
     assert float(distances.sel(target)) == pytest.approx(4.0)
+
+
+def test_calculate_fields_writes_and_reuses_cache(tmp_path):
+    dem = xr.DataArray(
+        np.zeros((3, 3), dtype=float),
+        dims=("y", "x"),
+        coords={"y": [0.0, 1.0, 2.0], "x": [0.0, 1.0, 2.0]},
+    )
+    calculator = PathDistanceCalculator(
+        connectivity_type=4,
+        lam_values=[0],
+        cache_directory=tmp_path,
+    )
+
+    first = calculator.calculate_fields(dem, [0.0], [0.0], ["station"])
+    second = calculator.calculate_fields(dem, [0.0], [0.0], ["station"])
+
+    assert len(list(tmp_path.glob("*.zarr"))) == 1
+    xr.testing.assert_equal(first.data, second.data)
+
+
+def test_source_points_outside_dem_raise_clear_error():
+    dem = xr.DataArray(
+        np.zeros((3, 3), dtype=float),
+        dims=("y", "x"),
+        coords={"y": [0.0, 1.0, 2.0], "x": [0.0, 1.0, 2.0]},
+    )
+    calculator = PathDistanceCalculator(connectivity_type=4, lam_values=[0])
+
+    with pytest.raises(ValueError, match="outside the supplied DEM extent"):
+        calculator.calculate_fields(dem, [10.0], [0.0], ["station"])

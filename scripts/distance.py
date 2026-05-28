@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import rioxarray  # noqa: F401
 import xarray as xr
 
-from src.interpolate.distance import calculate_non_euclidean_distance
+from src.interpolate.distance import PathDistanceCalculator
 from src.visualization.distance import plot_distance_panel
 
 
@@ -25,7 +25,7 @@ def main():
     parser.add_argument("-y", "--ycoord", type=float, default = 5164307, help = 'y-coordinate in the crs of the dem')
     parser.add_argument("-p", "--pointid", default = "Source Point", help = 'Id of the source point.')
     parser.add_argument("-r", "--res", default = 1000, help = 'Resolution of dem')
-    parser.add_argument('-d', "--maxd", default = None, help = 'Maximum distance for the visibility line.')
+    parser.add_argument('-d', "--maxd", type=float, default = None, help = 'Maximum distance for the visibility line.')
     parser.add_argument('-s', action = 'store_true', help = 'Activate to save distance grids as geotiff files.')
     args = parser.parse_args()
 
@@ -34,7 +34,7 @@ def main():
 
     dem_file = Path(f"data/dem_envelope_{args.res}m.tif")
 
-    if not dem_file.exists:
+    if not dem_file.exists():
         raise FileNotFoundError(f"File {dem_file} does not exist.")
 
     output_dir = Path(f"data/thrash/distance_{start_time:%d-%m-%Y_%H%M%S}")
@@ -43,14 +43,16 @@ def main():
     lam_values = [0, 25, 50, 75, 100, 150, 200]
 
     dem = xr.open_dataset(dem_file).band_data.squeeze(drop=True)
-    distances = calculate_non_euclidean_distance(
-        dem,
-        x_coords=[args.xcoord],
-        y_coords=[args.ycoord],
-        point_ids=[args.pointid],
+    distance_calculator = PathDistanceCalculator(
         lam_values=lam_values,
         max_visibility_distance=args.maxd,
     )
+    distances = distance_calculator.calculate_fields(
+        dem=dem,
+        x_coords=[args.xcoord],
+        y_coords=[args.ycoord],
+        point_ids=[args.pointid],
+    ).data
 
     if args.s:
         for (lam_value, pid), field in distances.groupby(["lam_value", "id"]):
