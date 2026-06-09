@@ -158,7 +158,7 @@ class MeteoData:
     def _project_station_coordinates(self, target_grid: xr.DataArray) -> dict[str, tuple[float, float]]:
         target_crs = target_grid.rio.crs
         if target_crs is None:
-            return {station_id: coords for station_id, coords in zip(self.ids, self.coords)}
+            raise ValueError("Target grid must have an explicit CRS before interpolation jobs can be built.")
 
         target_epsg = target_crs.to_epsg()
         if target_epsg == self.crs:
@@ -220,6 +220,7 @@ class MeteoData:
                 timestamp = ts,
                 parameter = param,
                 observations = obs,
-                target_grid = target_grid
+                target_grid = target_grid,
+                crs = target_grid.rio.crs,
             )
             yield job

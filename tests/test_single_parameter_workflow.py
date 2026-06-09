@@ -1,5 +1,6 @@
 import pandas as pd
 import xarray as xr
+import rioxarray  # noqa: F401
 
 from src.meteo.station import MeteoData
 from src.validate.date import localize_datetime_string
@@ -43,7 +44,7 @@ def test_build_jobs_is_single_parameter_and_end_exclusive():
         [[1000.0]],
         dims=("y", "x"),
         coords={"y": [46.0], "x": [11.0]},
-    )
+    ).rio.write_crs(4326)
 
     jobs = list(
         meteo_data.build_jobs(
@@ -58,6 +59,7 @@ def test_build_jobs_is_single_parameter_and_end_exclusive():
     job = jobs[0]
     y, X, x_coords, y_coords, ids = job.to_arrays()
     assert job.timestamp == pd.Timestamp("2026-05-13")
+    assert job.crs.to_epsg() == 4326
     assert X.shape == (3, 1)
     assert y.tolist() == [10.0, 9.0, 8.0]
     assert x_coords.tolist() == [11.0, 11.1, 11.2]

@@ -1,6 +1,8 @@
 import xarray as xr
 import pandas as pd
 import numpy as np
+import rioxarray  # noqa: F401
+from pyproj import CRS
 
 from dataclasses import dataclass
 import logging
@@ -21,6 +23,7 @@ class InterpolationJob:
     parameter: str
     observations: pd.DataFrame
     target_grid: xr.DataArray
+    crs: CRS | str | int
     distance_fields: DistanceField | None = None
 
     @property
@@ -32,6 +35,14 @@ class InterpolationJob:
             raise TypeError(f"InterpolationJob target_grid must be an xarray DataArray. Got {type(self.target_grid)}")
         if "x" not in self.target_grid.dims or "y" not in self.target_grid.dims:
             raise ValueError(f"InterpolationJob target_grid must contain x and y dimensions. Got {self.target_grid.dims}")
+        if self.target_grid.rio.crs is None:
+            raise ValueError("InterpolationJob target_grid must have an explicit CRS.")
+
+        crs = CRS.from_user_input(self.crs)
+        target_crs = CRS.from_user_input(self.target_grid.rio.crs)
+        if crs != target_crs:
+            raise ValueError(f"InterpolationJob CRS {crs.to_string()} does not match target grid CRS {target_crs.to_string()}.")
+        object.__setattr__(self, "crs", crs)
 
         for req_col in self.required_columns:
             if req_col not in self.observations.columns:
@@ -174,6 +185,9 @@ class Interpolator:
         )
 
     def interpolate(self, job: InterpolationJob) -> InterpolationResult | None:
+        if not isinstance(job, InterpolationJob):
+            raise TypeError(f"Interpolator.interpolate requires an InterpolationJob. Got {type(job)}")
+
         if self.cross_validator is not None:
             raise NotImplementedError("Cross Validation has not been implemented yet")
         else:
