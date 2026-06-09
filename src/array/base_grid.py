@@ -2,6 +2,7 @@ from pathlib import Path
 import xarray as xr
 import rioxarray
 from rasterio.enums import Resampling
+from pyproj import CRS
 import math
 import hashlib
 import json
@@ -14,6 +15,8 @@ logger = logging.getLogger(__name__)
 
 _POSSIBLE_X_DIM_NAMES = ["lon", "longitude", "x"]
 _POSSIBLE_Y_DIM_NAMES = ["lat", "latitude", "y"]
+_CRS_ATTR = "crs"
+_CRS_EPSG_ATTR = "crs_epsg"
 
 class BaseGrid:
 
@@ -52,8 +55,21 @@ class BaseGrid:
         if cache_path is not None and cache_path.exists():
             logger.info(f"Base grid cache hit at {cache_path}")
             data = self.open(cache_path, **kwargs)
+            data = self._normalize_spatial_dims(
+                data,
+                x_dim=target_x_dim,
+                y_dim=target_y_dim,
+                x_dim_target=target_x_dim,
+                y_dim_target=target_y_dim,
+            )
+            data = self._ensure_loaded_crs(data, source=cache_path)
+            if target_crs is not None and CRS.from_user_input(data.rio.crs) != CRS.from_user_input(target_crs):
+                raise ValueError(
+                    f"Cached base grid CRS {data.rio.crs} does not match requested target_crs EPSG:{target_crs}. "
+                    f"Delete cache at {cache_path} and rebuild it."
+                )
             self.data = data
-            self.crs = data.rio.crs.to_epsg() if data.rio.crs is not None else None
+            self.crs = self._crs_identifier(data.rio.crs)
             res_x, res_y = data.rio.resolution()
             self.res = (abs(res_x), abs(res_y))
             self.x_dim = target_x_dim
@@ -65,24 +81,25 @@ class BaseGrid:
         data = self._normalize_spatial_dims(data, x_dim=x_dim, y_dim=y_dim, x_dim_target = target_x_dim, y_dim_target = target_y_dim)
 
         needs_reprojection = False
+        data = self._restore_crs_from_metadata(data)
         original_crs_obj = data.rio.crs
         if crs is None and original_crs_obj is None:
             raise ValueError(
                 "Dataset crs could not be loaded when opening file. Please provide crs manually in config via crs key."
             )
         if original_crs_obj is None:
-            original_crs = crs
-            data = data.rio.write_crs(original_crs)
+            original_crs = self._crs_identifier(crs)
+            data = self._attach_crs_metadata(data, crs)
         else:
-            original_crs = original_crs_obj.to_epsg()
-            if crs is not None and original_crs != crs:
+            original_crs = self._crs_identifier(original_crs_obj)
+            if crs is not None and CRS.from_user_input(original_crs_obj) != CRS.from_user_input(crs):
                 logger.warning(
                     f"Provided crs does not correspond to dataset crs and will be ignored. {crs} vs {original_crs}"
                 )
 
         if target_crs is None:
             target_crs = original_crs
-        elif original_crs != target_crs:
+        elif CRS.from_user_input(original_crs) != CRS.from_user_input(target_crs):
             needs_reprojection = True
 
         original_res_x, original_res_y = data.rio.resolution()
@@ -105,7 +122,7 @@ class BaseGrid:
                 data = aoi.filter_bbox(data)
 
         if needs_reprojection:
-            if data.rio.crs.to_epsg() != target_crs:
+            if CRS.from_user_input(data.rio.crs) != CRS.from_user_input(target_crs):
                 logger.debug(f"Reprojecting base grid from crs {data.rio.crs} to {target_crs}")
             if target_res is not None and original_res != target_res:
                 logger.debug(f"Reprojecting base grid from resolution of {original_res} to {target_res}")
@@ -119,19 +136,84 @@ class BaseGrid:
             if aoi is not None:
                 data = aoi.filter_bbox(data)
 
-        if data.isnull().any().item():
+        if data.isnull().any().compute().item():
             raise ValueError('BaseGrid cannot contain NaN values. Check reprojection and aoi settings. Set higher value for aoi_buffer_m?')
 
         if cache_path is not None:
             cache_path.parent.mkdir(parents = True, exist_ok = True)
-            data.to_zarr(cache_path)
+            data = self._attach_crs_metadata(data, target_crs)
+            data.to_zarr(cache_path, zarr_format=2)
             logger.info(f"Base grid cache written to {cache_path}")
 
         self.data = data
-        self.crs = target_crs
+        self.crs = self._crs_identifier(target_crs)
         self.res = target_res if target_res is not None else original_res
         self.x_dim = target_x_dim
         self.y_dim = target_y_dim
+
+    @staticmethod
+    def _crs_identifier(crs):
+        crs = CRS.from_user_input(crs)
+        return crs.to_epsg() or crs.to_string()
+
+    @staticmethod
+    def _metadata_crs(data: xr.DataArray | xr.Dataset) -> CRS | None:
+        for attr_name in (_CRS_ATTR, _CRS_EPSG_ATTR):
+            value = data.attrs.get(attr_name)
+            if value is None:
+                continue
+            try:
+                return CRS.from_user_input(value)
+            except Exception:
+                logger.warning("Ignoring invalid CRS metadata %s=%s", attr_name, value)
+
+        spatial_ref = data.coords.get("spatial_ref")
+        if spatial_ref is not None:
+            for attr_name in ("crs_wkt", "spatial_ref"):
+                value = spatial_ref.attrs.get(attr_name)
+                if value is None:
+                    continue
+                try:
+                    return CRS.from_user_input(value)
+                except Exception:
+                    logger.warning("Ignoring invalid spatial_ref metadata %s", attr_name)
+
+        return None
+
+    @classmethod
+    def _restore_crs_from_metadata(cls, data: xr.DataArray | xr.Dataset) -> xr.DataArray | xr.Dataset:
+        if data.rio.crs is not None:
+            return data
+
+        crs = cls._metadata_crs(data)
+        if crs is None:
+            return data
+
+        return data.rio.write_crs(crs, inplace=False)
+
+    @classmethod
+    def _ensure_loaded_crs(
+        cls,
+        data: xr.DataArray | xr.Dataset,
+        source: str | Path,
+    ) -> xr.DataArray | xr.Dataset:
+        data = cls._restore_crs_from_metadata(data)
+        if data.rio.crs is None:
+            raise ValueError(
+                f"Base grid loaded from {source} does not define a CRS. "
+                "Provide a CRS in the source file or rebuild the cache with CRS metadata."
+            )
+        return data
+
+    @staticmethod
+    def _attach_crs_metadata(data: xr.DataArray | xr.Dataset, crs) -> xr.DataArray | xr.Dataset:
+        crs = CRS.from_user_input(crs)
+        data = data.rio.write_crs(crs, inplace=False)
+        data.attrs[_CRS_ATTR] = crs.to_string()
+        epsg = crs.to_epsg()
+        if epsg is not None:
+            data.attrs[_CRS_EPSG_ATTR] = f"EPSG:{epsg}"
+        return data
 
     def _cache_path(
         self,
@@ -185,7 +267,7 @@ class BaseGrid:
 
         key_json = json.dumps(key_payload, sort_keys = True, default = str)
         key_hash = hashlib.sha256(key_json.encode("utf-8")).hexdigest()[:16]
-        return Path("data") / f"{Path(path).stem}.{key_hash}.zarr"
+        return Path("data/cache") / f"{Path(path).stem}.{key_hash}.zarr"
 
     def open(self, path: str, var: str | None = None, squeeze: bool = True):
 
@@ -197,15 +279,21 @@ class BaseGrid:
         except Exception as e:
             logger.exception(f"Error opending base grid at {path}: {e}")
         
-        available_vars = list(data.data_vars.keys())
+        available_vars = [var_name for var_name in data.data_vars.keys() if var_name != "spatial_ref"]
         if var is not None:
-            if var not in available_vars:
+            if var not in data.data_vars:
                 raise ValueError(f"Data variable {var} not found in dataset. Available variables: {available_vars}")
-            data = data[var]
+            selected = data[var]
         else:
+            if not available_vars:
+                raise ValueError(f"No data variables found in base grid at {path}.")
             if len(available_vars) > 1:
                 logger.warning(f"Found multiple variables in base grid: {available_vars}. Picking first one.")
-            data = data[next(iter(available_vars))]
+            selected = data[next(iter(available_vars))]
+
+        if "spatial_ref" in data:
+            selected = selected.assign_coords(spatial_ref=data["spatial_ref"])
+        data = selected
 
         if squeeze:
             data = data.squeeze(drop = True)

@@ -203,6 +203,7 @@ class Interpolator:
             )
             return None
 
+        ##todo: handle failed fits or very poor fits. Either log warnign or return early
         vertical_fit = self.vertical_model.fit(X, y)
         vertical_prediction = vertical_fit.predict(job.target_grid)
         residual_prediction = None
