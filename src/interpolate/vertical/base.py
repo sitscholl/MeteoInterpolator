@@ -2,31 +2,7 @@ import numpy as np
 import xarray as xr
 from abc import ABC, abstractmethod
 
-class BaseVerticalModel(ABC):
-    registry: dict[str, type["BaseVerticalModel"]] = {}
-
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
-        if cls is not BaseVerticalModel:
-            BaseVerticalModel.registry[cls.key()] = cls
-
-    @classmethod
-    @abstractmethod
-    def key(cls) -> str:
-        pass
-
-    @classmethod
-    def create(cls, key: str, **kwargs):
-        model_cls = cls.registry.get(key)
-        if model_cls is None:
-            available = ", ".join(sorted(cls.registry)) or "none"
-            raise ValueError(f"Unknown vertical model '{key}'. Available: {available}")
-        return model_cls(**kwargs)
-
-    @abstractmethod
-    def fit(self, X, y):
-        pass
-
+class BaseFittedVerticalModel(ABC):
     @abstractmethod
     def _predict_numpy_2d(self, X: np.ndarray) -> np.ndarray:
         pass
@@ -52,3 +28,28 @@ class BaseVerticalModel(ABC):
         original_shape = X.shape
         X_2d = X.reshape(-1, 1)
         return self._predict_numpy_2d(X_2d).reshape(original_shape)
+
+class BaseVerticalModel(ABC):
+    registry: dict[str, type["BaseVerticalModel"]] = {}
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if cls is not BaseVerticalModel:
+            BaseVerticalModel.registry[cls.key()] = cls
+
+    @classmethod
+    @abstractmethod
+    def key(cls) -> str:
+        pass
+
+    @classmethod
+    def create(cls, key: str, **kwargs):
+        model_cls = cls.registry.get(key)
+        if model_cls is None:
+            available = ", ".join(sorted(cls.registry)) or "none"
+            raise ValueError(f"Unknown vertical model '{key}'. Available: {available}")
+        return model_cls(**kwargs)
+
+    @abstractmethod
+    def fit(self, X, y) -> BaseFittedVerticalModel:
+        pass

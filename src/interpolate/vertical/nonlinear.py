@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass
 from collections.abc import Mapping, Sequence
 
-from .base import BaseVerticalModel
+from .base import BaseFittedVerticalModel, BaseVerticalModel
 from .linear import LinearVerticalModel
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,20 @@ class NonLinearProfileParams:
         if isinstance(values, Sequence) and not isinstance(values, str):
             return cls.from_array(values)
         raise TypeError(f"Invalid nonlinear profile parameters: {type(values)}")
+
+@dataclass(frozen=True)
+class NonLinearVerticalFit(BaseFittedVerticalModel):
+    parameters: NonLinearProfileParams
+
+    def _predict_numpy_2d(self, X):
+        return NonLinearVerticalModel._calculate_nonlinear_profile(
+            X,
+            self.parameters.t0,
+            self.parameters.gamma,
+            self.parameters.a,
+            self.parameters.h0,
+            self.parameters.h1,
+        )
 
 class NonLinearVerticalModel(BaseVerticalModel):
     def __init__(
@@ -101,9 +115,9 @@ class NonLinearVerticalModel(BaseVerticalModel):
             fit_X = X
             fit_y = y
 
-        linear_model = LinearVerticalModel().fit(fit_X.reshape(-1, 1), fit_y)
-        t0 = float(linear_model.estimator.intercept_)
-        gamma = float(-linear_model.estimator.coef_[0])
+        linear_fit = LinearVerticalModel().fit(fit_X.reshape(-1, 1), fit_y)
+        t0 = float(linear_fit.intercept)
+        gamma = float(-linear_fit.coef[0])
         return NonLinearProfileParams(t0, gamma, 0.0, 500.0, 1500.0)
 
     def fit(self, X, y):
@@ -135,21 +149,7 @@ class NonLinearVerticalModel(BaseVerticalModel):
             maxfev=5000
             )
 
-        self.optimized_parameters = NonLinearProfileParams.from_array(popt)
-        return self
-
-    def _predict_numpy_2d(self, X):
-        if self.optimized_parameters is None:
-            raise ValueError("Fit model first before calling predict")
-        params = self.optimized_parameters
-        return self._calculate_nonlinear_profile(
-            X,
-            params.t0,
-            params.gamma,
-            params.a,
-            params.h0,
-            params.h1,
-        )
+        return NonLinearVerticalFit(parameters=NonLinearProfileParams.from_array(popt))
 
 if __name__ == '__main__':
 
@@ -181,10 +181,10 @@ if __name__ == '__main__':
 
     model = NonLinearVerticalModel()
 
-    model.fit(X, y)
+    fit = model.fit(X, y)
 
     x_pred = np.arange(np.min(X), np.max(X), step = 1)
-    preds = model.predict(x_pred)
+    preds = fit.predict(x_pred)
 
     fig, ax = plt.subplots()
     ax.scatter(y, X, label="Synthetic stations", color="tab:blue")
