@@ -7,6 +7,7 @@ import numpy as np
 import xarray as xr
 import pandas as pd
 import geopandas as gpd
+import rioxarray  # noqa: F401
 from shapely.geometry import Point
 
 from ..interpolate import InterpolationJob
@@ -154,6 +155,26 @@ class MeteoData:
 
         return pd.concat(frames, ignore_index=True)
 
+    def _project_station_coordinates(self, target_grid: xr.DataArray) -> dict[str, tuple[float, float]]:
+        target_crs = target_grid.rio.crs
+        if target_crs is None:
+            return {station_id: coords for station_id, coords in zip(self.ids, self.coords)}
+
+        target_epsg = target_crs.to_epsg()
+        if target_epsg == self.crs:
+            return {station_id: coords for station_id, coords in zip(self.ids, self.coords)}
+
+        stations = gpd.GeoDataFrame(
+            {"station_id": self.ids},
+            geometry=[Point(x, y) for x, y in self.coords],
+            crs=f"EPSG:{self.crs}",
+        ).to_crs(target_crs)
+
+        return {
+            station_id: (float(geometry.x), float(geometry.y))
+            for station_id, geometry in zip(stations["station_id"], stations.geometry)
+        }
+
     def get_station_data(self, station_id: str):
         if station_id not in self.ids:
             logger.warning(f"No data available for station {station_id}")
@@ -177,13 +198,16 @@ class MeteoData:
         start_ts = pd.to_datetime(start)
         end_ts = pd.to_datetime(end)
         df = df[(df["datetime"] >= start_ts) & (df["datetime"] < end_ts)]
+        projected_coords = self._project_station_coordinates(target_grid)
+        df["x"] = df["station_id"].map(lambda station_id: projected_coords[station_id][0])
+        df["y"] = df["station_id"].map(lambda station_id: projected_coords[station_id][1])
 
         for interp_date, subset in df.groupby('datetime'):
             ts = pd.to_datetime(interp_date)
             
             n_rows_before = len(subset)
 
-            obs = subset.dropna(subset = _REQUIRED_COLUMNS)
+            obs = subset.dropna(subset = [param, *_REQUIRED_COLUMNS])
             if obs.empty:
                 logger.warning(f"No data found for parameter '{param}' and timestamp {ts}")
                 continue

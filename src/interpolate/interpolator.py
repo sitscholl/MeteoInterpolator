@@ -1,5 +1,6 @@
 import xarray as xr
 import pandas as pd
+import numpy as np
 
 from dataclasses import dataclass
 import logging
@@ -27,21 +28,28 @@ class InterpolationJob:
         return [self.parameter, *_REQUIRED_COLUMNS]
 
     def __post_init__(self):
-        
-        for req_col in self.required_columns:
+        if not isinstance(self.target_grid, xr.DataArray):
+            raise TypeError(f"InterpolationJob target_grid must be an xarray DataArray. Got {type(self.target_grid)}")
+        if "x" not in self.target_grid.dims or "y" not in self.target_grid.dims:
+            raise ValueError(f"InterpolationJob target_grid must contain x and y dimensions. Got {self.target_grid.dims}")
 
+        for req_col in self.required_columns:
             if req_col not in self.observations.columns:
                 raise ValueError(f"InterpolationJob observations is missing required column {req_col}. Got {self.observations.columns}")
-
             if self.observations[req_col].isna().any():
                 raise ValueError(f"Found NaN values in InterpolationJob observations for column {req_col}")
+
+        if self.observations["station_id"].duplicated().any():
+            duplicated = self.observations.loc[self.observations["station_id"].duplicated(), "station_id"].tolist()
+            raise ValueError(f"InterpolationJob observations contain duplicated station_id values: {duplicated}")
 
     def to_arrays(self):
         y = self.observations[self.parameter].to_numpy(dtype=float)
         X = self.observations["elevation"].to_numpy(dtype=float).reshape(-1, 1)
-        coords = [(x, y) for x,y in zip(self.observations['x'], self.observations['y'])]
-        ids = self.observations['station_id'].to_numpy(dtype = str)
-        return (y, X, coords, ids)
+        x_coords = self.observations["x"].to_numpy(dtype=float)
+        y_coords = self.observations["y"].to_numpy(dtype=float)
+        ids = self.observations["station_id"].to_numpy(dtype=str)
+        return y, X, x_coords, y_coords, ids
 
     def __repr__(self):
         return f"InterpolationJob (date: {self.timestamp}, parameter: {self.parameter}, samples: {len(self.observations)})"
@@ -112,18 +120,65 @@ class Interpolator:
             min_sample_size = min_sample_size
             )
 
-    def prepare_distance_fields(self, source_points, target_grid):
-        pass
+    def prepare_distance_fields(self, job: InterpolationJob) -> DistanceField:
+        if self.distance_calculator is None:
+            raise ValueError(
+                "Residual interpolation requires distance_fields on the InterpolationJob "
+                "or a configured distance calculator."
+            )
 
-    def _check_grid_alignment(self, grid1, grid2):
-        pass
+        _, _, x_coords, y_coords, ids = job.to_arrays()
+        return self.distance_calculator.calculate_fields(
+            dem=job.target_grid,
+            x_coords=x_coords,
+            y_coords=y_coords,
+            point_ids=ids,
+        )
 
-    def interpolate(self, job: InterpolationJob) -> InterpolationResult:
+    def _check_grid_alignment(self, grid: xr.DataArray, distance_fields: DistanceField):
+        if not isinstance(distance_fields, DistanceField):
+            raise ValueError(f"distance_fields must be a DistanceField. Got {type(distance_fields)}")
+        if distance_fields.data is None:
+            raise ValueError("distance_fields.data must not be None for residual interpolation.")
+
+        distance_data = distance_fields.data
+        for coord_name in ("x", "y"):
+            if coord_name not in grid.coords:
+                raise ValueError(f"Prediction grid is missing coordinate '{coord_name}'.")
+            if coord_name not in distance_data.coords:
+                raise ValueError(f"Distance fields are missing coordinate '{coord_name}'.")
+
+            grid_values = np.asarray(grid.coords[coord_name].values)
+            distance_values = np.asarray(distance_data.coords[coord_name].values)
+            if grid_values.shape != distance_values.shape or not np.allclose(
+                grid_values,
+                distance_values,
+                rtol=0,
+                atol=1e-9,
+            ):
+                raise ValueError(
+                    f"Distance field {coord_name} coordinates do not align with the prediction grid."
+                )
+
+    @staticmethod
+    def _residual_array(residuals, ids, x_coords, y_coords) -> xr.DataArray:
+        return xr.DataArray(
+            np.asarray(residuals, dtype=float),
+            dims=("id",),
+            coords={
+                "id": ids,
+                "x": ("id", np.asarray(x_coords, dtype=float)),
+                "y": ("id", np.asarray(y_coords, dtype=float)),
+            },
+            name="residual",
+        )
+
+    def interpolate(self, job: InterpolationJob) -> InterpolationResult | None:
         if self.cross_validator is not None:
             raise NotImplementedError("Cross Validation has not been implemented yet")
         else:
             cv_results = None     
-        y, X, coords, ids = job.to_arrays()
+        y, X, x_coords, y_coords, ids = job.to_arrays()
         
         if len(y) < self.min_sample_size:
             logger.warning(
@@ -135,15 +190,35 @@ class Interpolator:
             return None
 
         vertical_fit = self.vertical_model.fit(X, y)
-        predictions = vertical_fit.predict(job.target_grid)
+        vertical_prediction = vertical_fit.predict(job.target_grid)
+        residual_prediction = None
+        prediction = vertical_prediction
 
         if self.residual_model is not None:
-            self._check_grid_alignment(predictions, job.distance_fields) #raise if spatial coords do not align
+            distance_fields = job.distance_fields
+            if distance_fields is None:
+                distance_fields = self.prepare_distance_fields(job)
 
-            residuals = y - vertical_fit.predict(X)
-            residuals = xr.DataArray(residuals, dims = {'id': ids, 'coords': coords})
-            residual_field = self.residual_model.interpolate(y = residuals, distance_fields = job.distance_fields)
+            station_predictions = np.asarray(vertical_fit.predict(X), dtype=float).reshape(-1)
+            residuals = y - station_predictions
+            residuals = self._residual_array(residuals, ids, x_coords, y_coords)
+            residual_prediction = self.residual_model.interpolate(y=residuals, distance_fields=distance_fields)
 
-            predictions += residual_field.assign_coords({'x': predictions.x.values, 'y': predictions.y.values}) #avoid floating point mismatches in coords
+            if residual_prediction is not None:
+                self._check_grid_alignment(vertical_prediction, distance_fields)
+                residual_prediction = residual_prediction.assign_coords(
+                    {
+                        "x": vertical_prediction.x.values,
+                        "y": vertical_prediction.y.values,
+                    }
+                )
+                prediction = vertical_prediction + residual_prediction
 
-        return predictions, cv_results
+        return InterpolationResult(
+            timestamp=job.timestamp,
+            parameter=job.parameter,
+            prediction=prediction,
+            vertical_prediction=vertical_prediction,
+            residual_prediction=residual_prediction,
+            cv_results=cv_results,
+        )

@@ -113,6 +113,8 @@ class InterpolationWorkflow:
             logger.info('Starting interpolation job %s', job)
 
             interpolation_result = self.context.interpolator.interpolate(job)
+            if interpolation_result is None:
+                continue
 
             #todo: do this inside interpolator and directly return prediction with correct structure
             output_grid = self._prepare_grid_for_output(interpolation_result.prediction, job.parameter, job.timestamp)
