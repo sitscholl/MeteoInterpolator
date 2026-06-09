@@ -124,6 +124,8 @@ class NonLinearVerticalModel(BaseVerticalModel):
 
         params = self._get_initial_params(X, y)
         sigma = np.ones_like(y)
+
+        ##todo: Handle failed fit. Raise error? or return None?
         popt, pcov = curve_fit(
             self._calculate_nonlinear_profile, 
             X, y, 

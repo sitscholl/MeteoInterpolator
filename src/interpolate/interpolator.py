@@ -12,6 +12,8 @@ from .cv import CrossValidator
 
 logger = logging.getLogger(__name__)
 
+_REQUIRED_COLUMNS = ['elevation', 'x', 'y', 'station_id']
+
 @dataclass(frozen=True)
 class InterpolationJob:
     timestamp: pd.Timestamp
@@ -19,6 +21,30 @@ class InterpolationJob:
     observations: pd.DataFrame
     target_grid: xr.DataArray
     distance_fields: DistanceField | None = None
+
+    @property
+    def required_columns(self):
+        return [self.parameter, *_REQUIRED_COLUMNS]
+
+    def __post_init__(self):
+        
+        for req_col in self.required_columns:
+
+            if req_col not in self.observations.columns:
+                raise ValueError(f"InterpolationJob observations is missing required column {req_col}. Got {self.observations.columns}")
+
+            if self.observations[req_col].isna().any():
+                raise ValueError(f"Found NaN values in InterpolationJob observations for column {req_col}")
+
+    def to_arrays(self):
+        y = self.observations[self.parameter].to_numpy(dtype=float)
+        X = self.observations["elevation"].to_numpy(dtype=float).reshape(-1, 1)
+        coords = [(x, y) for x,y in zip(self.observations['x'], self.observations['y'])]
+        ids = self.observations['station_id'].to_numpy(dtype = str)
+        return (y, X, coords, ids)
+
+    def __repr__(self):
+        return f"InterpolationJob (date: {self.timestamp}, parameter: {self.parameter}, samples: {len(self.observations)})"
 
 @dataclass(frozen=True)
 class InterpolationResult:
@@ -36,6 +62,7 @@ class Interpolator:
     residual_model: InverseDistanceWeighting | None = None
     regions: InterpolationRegions | None = None
     cross_validator: CrossValidator | None = None
+    min_sample_size: int = 3
 
     @classmethod
     def from_config(cls, config: dict):
@@ -74,15 +101,21 @@ class Interpolator:
         if cv_config is None:
             logger.info('No cross validation configuration provided. Cross validation will be skipped')
 
+        min_sample_size = config.get('min_sample_size', 3)
+
         return cls(
             vertical_model = vertical_model, 
             distance_calculator = distance_calculator, 
             residual_model = residual_model, 
             regions = interpolation_regions, 
-            cross_validator = cross_validator
+            cross_validator = cross_validator,
+            min_sample_size = min_sample_size
             )
 
-    def prepare_distance_fields(source_points, target_grid):
+    def prepare_distance_fields(self, source_points, target_grid):
+        pass
+
+    def _check_grid_alignment(self, grid1, grid2):
         pass
 
     def interpolate(self, job: InterpolationJob) -> InterpolationResult:
@@ -90,14 +123,14 @@ class Interpolator:
             raise NotImplementedError("Cross Validation has not been implemented yet")
         else:
             cv_results = None     
-        X, y, coords, ids = self._prepare_observations(job.observations)
+        y, X, coords, ids = job.to_arrays()
         
-        if len(y) < 3:
+        if len(y) < self.min_sample_size:
             logger.warning(
-                "Skipping interpolation for parameter %s at %s because only %s station sample(s) are available.",
-                job.parameter,
-                job.timestamp,
+                "Skipping interpolation job %s because only %s station sample(s) are available and %s are required.",
+                job,
                 len(y),
+                self.min_sample_size,
             )
             return None
 
@@ -108,9 +141,9 @@ class Interpolator:
             self._check_grid_alignment(predictions, job.distance_fields) #raise if spatial coords do not align
 
             residuals = y - vertical_fit.predict(X)
-            residuals = xr.DataArray(residuals, coords = {'id': ids, 'y': [i[1] for i in coords], 'x': [i[0] for i in coords]})
+            residuals = xr.DataArray(residuals, dims = {'id': ids, 'coords': coords})
             residual_field = self.residual_model.interpolate(y = residuals, distance_fields = job.distance_fields)
 
-            predictions += residual_field.assign_coords({'x': predictions.v.values, 'y': predictions.y.values}) #avoid floating point mismatches in coords
+            predictions += residual_field.assign_coords({'x': predictions.x.values, 'y': predictions.y.values}) #avoid floating point mismatches in coords
 
         return predictions, cv_results

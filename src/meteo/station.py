@@ -4,9 +4,13 @@ from typing import Optional, Tuple
 
 import httpx
 import numpy as np
+import xarray as xr
 import pandas as pd
 import geopandas as gpd
 from shapely.geometry import Point
+
+from ..interpolate import InterpolationJob
+from ..interpolate.interpolator import _REQUIRED_COLUMNS
 
 logger = logging.getLogger(__name__)
 
@@ -157,15 +161,18 @@ class MeteoData:
         station_idx = self.ids.index(station_id)
         return self.data[station_idx]
 
-    def iter_samples(self, start, end, param: str):
+    def build_jobs(self, start: pd.Timestamp, end: pd.Timestamp, param: str, target_grid: xr.DataArray):
 
-        df = self.to_dataframe()
+        df = self.to_dataframe(include_coords = True)
         if df.empty:
             return
         if "datetime" not in df.columns:
             raise ValueError("Missing 'datetime' column in MeteoData dataframes.")
         if param not in df.columns:
             raise ValueError(f"{param} not found in MeteoData columns. Choose one of {df.columns}")
+        missing_cols = [i for i in _REQUIRED_COLUMNS if i not in df.columns]
+        if missing_cols:
+            raise ValueError(f"Creating InterpolationJob requires the following columns to be present in the data {_REQUIRED_COLUMNS}. Got {df.columns}. Missing: {missing_cols}")
 
         start_ts = pd.to_datetime(start)
         end_ts = pd.to_datetime(end)
@@ -174,12 +181,21 @@ class MeteoData:
         for interp_date, subset in df.groupby('datetime'):
             ts = pd.to_datetime(interp_date)
             
-            series = subset[param].dropna()
-            if series.empty:
+            n_rows_before = len(subset)
+
+            obs = subset.dropna(subset = _REQUIRED_COLUMNS)
+            if obs.empty:
                 logger.warning(f"No data found for parameter '{param}' and timestamp {ts}")
                 continue
 
-            y = series.to_numpy(dtype=float)
-            elevations = subset.loc[series.index, "elevation"].to_numpy(dtype=float)
-            X = elevations.reshape(-1, 1)
-            yield (interp_date, X, y)
+            n_rows_after = len(obs)
+            if n_rows_after < n_rows_before:
+                logger.warning(f"Dropped {n_rows_before - n_rows_after} rows with NaN values for parameter {param} on timestamp {ts}")
+
+            job = InterpolationJob(
+                timestamp = ts,
+                parameter = param,
+                observations = obs,
+                target_grid = target_grid
+            )
+            yield job

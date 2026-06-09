@@ -4,7 +4,7 @@ general:
 
 meteo_data:
   handler: province_api
-  stations: ['19300MS', '69900MS', '09700MS', '82200MS']
+  stations: ['19300MS', '69900MS', '09700MS', '82200MS', '86900MS']
 
 base_grid:
   path: "https://files.isimip.org/ISIMIP3a/InputData/climate/atmosphere/obsclim/global/daily/historical/CHELSA-W5E5/chelsa-w5e5_obsclim_orog_30arcsec_global.nc#mode=bytes"
@@ -20,9 +20,13 @@ aoi:
   maxy: 47
 
 interpolation:
+  min_sample_size: 3
+
   vertical_model:
-    type: linear
-    fit_intercept: True
+    type: nonlinear
+    fit_method: "trf"
+    fit_initial_params: True
+    initial_params_elev_threshold: 1500
 
   distance:
     type: path_distance

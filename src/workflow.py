@@ -8,7 +8,6 @@ import logging
 
 from .runtime import RuntimeContext
 from .meteo.station import MeteoData
-from .interpolate.interpolator import InterpolationJob
 
 logger = logging.getLogger(__name__)
 
@@ -108,9 +107,8 @@ class InterpolationWorkflow:
         )
 
         ## Interpolate
-        interpolation_jobs = meteo_data.build_jobs(start, end, param)
         results = []
-        for job in interpolation_jobs:
+        for job in meteo_data.build_jobs(start, end, param, target_grid = self.context.base_grid.data):
 
             logger.info('Starting interpolation job %s', job)
 
