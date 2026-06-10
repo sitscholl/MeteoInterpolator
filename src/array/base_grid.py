@@ -26,6 +26,7 @@ class BaseGrid:
     data: xr.DataArray
     aoi: AOI | None
     resampling_method: str
+    fingerprint: str
     from_cache: bool = False
 
     def __post_init__(self):
@@ -342,10 +343,13 @@ def load_base_grid(
         cache_manager.initialize_cache(data, key = _CACHE_KEY, cache_params=cache_payload)
         logger.info(f"Base grid cache written to {cache_manager._build_cache_path(key = _CACHE_KEY, cache_params=cache_payload)}")
 
+    fingerprint = CacheManager.array_fingerprint(data)
+
     return BaseGrid(
         path = path,
         data = data,
         aoi = aoi,
         resampling_method = resampling_method.name.lower() if isinstance(resampling_method, Resampling) else str(resampling_method).lower(),
+        fingerprint = fingerprint,
         from_cache = from_cache
     )

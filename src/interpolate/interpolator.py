@@ -7,6 +7,8 @@ from pyproj import CRS
 from dataclasses import dataclass
 import logging
 
+from ..array.base_grid import BaseGrid
+from ..array.cache import CacheManager
 from .vertical import BaseVerticalModel
 from .distance import BaseDistanceCalculator, DistanceField
 from .idw import InverseDistanceWeighting
@@ -22,15 +24,21 @@ class InterpolationJob:
     timestamp: pd.Timestamp
     parameter: str
     observations: pd.DataFrame
-    target_grid: xr.DataArray
+    base_grid: BaseGrid
     crs: CRS | str | int
     distance_fields: DistanceField | None = None
+
+    @property
+    def target_grid(self) -> xr.DataArray:
+        return self.base_grid.data
 
     @property
     def required_columns(self):
         return [self.parameter, *_REQUIRED_COLUMNS]
 
     def __post_init__(self):
+        if not isinstance(self.base_grid, BaseGrid):
+            raise TypeError(f"InterpolationJob base_grid must be a BaseGrid. Got {type(self.base_grid)}")
         if not isinstance(self.target_grid, xr.DataArray):
             raise TypeError(f"InterpolationJob target_grid must be an xarray DataArray. Got {type(self.target_grid)}")
         if "x" not in self.target_grid.dims or "y" not in self.target_grid.dims:
@@ -84,7 +92,11 @@ class Interpolator:
     min_sample_size: int = 3
 
     @classmethod
-    def from_config(cls, config: dict):
+    def from_config(
+        cls,
+        config: dict,
+        cache_manager: CacheManager | None = None,
+    ):
         vertical_config = dict(config["vertical_model"])
         vertical_handler = vertical_config.pop("type")
         vertical_model = BaseVerticalModel.create(vertical_handler, **vertical_config)
@@ -97,7 +109,11 @@ class Interpolator:
         else:
             distance_config = dict(distance_config)
             distance_handler = distance_config.pop("type")
-            distance_calculator = BaseDistanceCalculator.create(distance_handler, **distance_config)
+            distance_calculator = BaseDistanceCalculator.create(
+                distance_handler,
+                cache_manager=cache_manager,
+                **distance_config,
+            )
 
         idw_config = config.get('inverse_distance_weighting')
         if idw_config is None:
@@ -137,10 +153,9 @@ class Interpolator:
                 "Residual interpolation requires distance_fields on the InterpolationJob "
                 "or a configured distance calculator."
             )
-
         _, _, x_coords, y_coords, ids = job.to_arrays()
         return self.distance_calculator.calculate_fields(
-            dem=job.target_grid,
+            dem=job.base_grid,
             x_coords=x_coords,
             y_coords=y_coords,
             point_ids=ids,

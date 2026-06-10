@@ -108,7 +108,7 @@ class InterpolationWorkflow:
 
         ## Interpolate
         results = []
-        for job in meteo_data.build_jobs(start, end, param, target_grid = self.context.base_grid.data):
+        for job in meteo_data.build_jobs(start, end, param, base_grid = self.context.base_grid):
 
             logger.info('Starting interpolation job %s', job)
 

@@ -1,6 +1,5 @@
 from collections.abc import Hashable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 import xarray as xr
@@ -9,6 +8,8 @@ from scipy.sparse.csgraph import dijkstra
 
 import logging
 
+from ...array.base_grid import BaseGrid
+from ...array.cache import CacheManager
 from .base import BaseDistanceCalculator, DistanceField
 
 logger = logging.getLogger(__name__)
@@ -27,9 +28,9 @@ class PathDistanceCalculator(BaseDistanceCalculator):
         connectivity_type: int = 4,
         lam_values: Sequence[float] | None = None,
         max_visibility_distance: float | None = None,
-        cache_directory: str | Path | None = None,
+        cache_manager: CacheManager | None = None,
         ):
-        super().__init__(cache_directory = cache_directory)
+        super().__init__(cache_manager=cache_manager)
 
         if connectivity_type not in [4, 8]:
             raise ValueError(f"Connectivity type should be one of 4 or 8. Got {connectivity_type}")
@@ -61,14 +62,8 @@ class PathDistanceCalculator(BaseDistanceCalculator):
     def key(cls):
         return "path_distance"
 
-    def _distance_cache_parameters(
-        self,
-        dem: xr.DataArray,
-        x_coords: Sequence[float],
-        y_coords: Sequence[float],
-        point_ids: Sequence[Hashable],
-    ) -> dict:
-        return super()._distance_cache_parameters(dem, x_coords, y_coords, point_ids) | {
+    def cache_parameters(self) -> dict:
+        return {
             "connectivity_type": self.connectivity_type,
             "lam_values": list(self.lam_values),
             "max_visibility_distance": self.max_visibility_distance,
@@ -339,14 +334,14 @@ class PathDistanceCalculator(BaseDistanceCalculator):
 
     def calculate_distance(
         self,
-        dem: xr.DataArray,
+        dem: BaseGrid,
         x_coords: Sequence[float],
         y_coords: Sequence[float],
         point_ids: Sequence[Hashable] | None = None,
     ) -> DistanceField:
-        dem = self._validate_dem(dem)
+        dem_data = self._validate_dem(dem)
         x_coords, y_coords, point_ids = self._validate_source_points(x_coords, y_coords, point_ids)
-        y_idx, x_idx = self._nearest_cell_indices(dem, x_coords, y_coords)
+        y_idx, x_idx = self._nearest_cell_indices(dem_data, x_coords, y_coords)
         ids = self._point_ids(len(x_idx), point_ids)
         lam_values = list(self.lam_values)
 
@@ -355,8 +350,8 @@ class PathDistanceCalculator(BaseDistanceCalculator):
         if any(lam < 0 for lam in lam_values):
             raise ValueError("Lambda values must be non-negative.")
 
-        n_y = dem.sizes["y"]
-        n_x = dem.sizes["x"]
+        n_y = dem_data.sizes["y"]
+        n_x = dem_data.sizes["x"]
         source_indices = y_idx * n_x + x_idx
 
         logger.info(
@@ -369,7 +364,7 @@ class PathDistanceCalculator(BaseDistanceCalculator):
             self.connectivity_type,
             self.max_visibility_distance,
         )
-        edges = self._build_terrain_graph_edges(dem)
+        edges = self._build_terrain_graph_edges(dem_data)
 
         distance_fields = []
         for lam in lam_values:
@@ -398,8 +393,8 @@ class PathDistanceCalculator(BaseDistanceCalculator):
             coords={
                 "lam_value": lam_values,
                 "id": ids,
-                "y": dem.coords["y"],
-                "x": dem.coords["x"],
+                "y": dem_data.coords["y"],
+                "x": dem_data.coords["x"],
             },
             name="path_distance",
             attrs={

@@ -1,4 +1,5 @@
 from dataclasses import FrozenInstanceError
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -6,10 +7,22 @@ import pytest
 import xarray as xr
 import rioxarray  # noqa: F401
 
+from src.array.base_grid import BaseGrid
+from src.array.cache import CacheManager
 from src.interpolate.distance import DistanceField
 from src.interpolate.idw import InverseDistanceWeighting
 from src.interpolate.interpolator import InterpolationJob, Interpolator
 from src.interpolate.vertical import LinearVerticalFit, LinearVerticalModel
+
+
+def _base_grid(data: xr.DataArray) -> BaseGrid:
+    return BaseGrid(
+        path=Path("memory"),
+        data=data,
+        aoi=None,
+        resampling_method="nearest",
+        fingerprint=CacheManager.array_fingerprint(data),
+    )
 
 
 def test_linear_fit_returns_immutable_fitted_model():
@@ -39,7 +52,7 @@ def test_residual_array_uses_id_dimension_with_station_coordinates():
     assert residuals.y.values.tolist() == [30.0, 40.0]
 
 
-def test_interpolation_job_requires_explicit_matching_crs():
+def test_interpolation_job_requires_base_grid_with_matching_crs():
     target_grid = xr.DataArray(
         [[0.0]],
         dims=("y", "x"),
@@ -55,12 +68,12 @@ def test_interpolation_job_requires_explicit_matching_crs():
         }
     )
 
-    with pytest.raises(ValueError, match="explicit CRS"):
+    with pytest.raises(TypeError, match="base_grid must be a BaseGrid"):
         InterpolationJob(
             timestamp=pd.Timestamp("2026-05-13"),
             parameter="tair_2m",
             observations=observations,
-            target_grid=target_grid,
+            base_grid=target_grid,
             crs=4326,
         )
 
@@ -69,7 +82,7 @@ def test_interpolation_job_requires_explicit_matching_crs():
             timestamp=pd.Timestamp("2026-05-13"),
             parameter="tair_2m",
             observations=observations,
-            target_grid=target_grid.rio.write_crs(3857),
+            base_grid=_base_grid(target_grid.rio.write_crs(3857)),
             crs=4326,
         )
 
@@ -105,7 +118,7 @@ def test_interpolator_returns_result_and_adds_idw_residuals():
         timestamp=pd.Timestamp("2026-05-13"),
         parameter="tair_2m",
         observations=observations,
-        target_grid=target_grid,
+        base_grid=_base_grid(target_grid),
         crs=4326,
         distance_fields=DistanceField("test_distance", distances),
     )

@@ -37,7 +37,6 @@ interpolation:
     connectivity_type: 4
     lam_values: [0, 25, 50, 75, 100, 150, 200]
     max_visibility_distance: null
-    cache_directory: data/cache/distances
 
   inverse_distance_weighting:
     neighbours: 4

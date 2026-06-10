@@ -92,7 +92,10 @@ class RuntimeContext:
             logger.info("Gapfiller initialized")
 
         ## Interpolator
-        self.interpolator = Interpolator.from_config(config['interpolation'])
+        self.interpolator = Interpolator.from_config(
+            config['interpolation'],
+            cache_manager=self.cache_manager,
+        )
 
         ## Grid Writer
         output_config = config.get('output')

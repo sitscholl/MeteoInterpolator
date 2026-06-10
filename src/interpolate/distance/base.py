@@ -1,16 +1,16 @@
 from abc import abstractmethod, ABC
 from dataclasses import dataclass
 from typing import ClassVar, Sequence, Hashable
-from pathlib import Path
-import hashlib
-import json
 import logging
-from shutil import rmtree
 
 import numpy as np
 import xarray as xr
 
+from ...array.base_grid import BaseGrid
+from ...array.cache import CacheManager
+
 logger = logging.getLogger(__name__)
+_CACHE_KEY = "distance_field"
 
 @dataclass
 class DistanceField:
@@ -32,6 +32,23 @@ class DistanceField:
             distance_type = fields[0].distance_type,
             data = data
         )
+
+    @classmethod
+    def from_dataset(cls, dataset: xr.Dataset) -> "DistanceField":
+        data_vars = list(dataset.data_vars)
+        if len(data_vars) != 1:
+            raise ValueError(f"Expected exactly one cached distance variable. Got {data_vars}")
+        data = dataset[data_vars[0]]
+        distance_type = dataset.attrs.get("distance_type", data.attrs.get("distance_type", data.name))
+        return cls(distance_type=distance_type, data=data)
+
+    def to_dataset(self) -> xr.Dataset:
+        if self.data is None:
+            raise ValueError("Cannot convert an empty DistanceField to a Dataset.")
+        data_name = self.data.name or self.distance_type or "distance"
+        dataset = self.data.to_dataset(name=data_name)
+        dataset.attrs["distance_type"] = self.distance_type
+        return dataset
 
     def __post_init__(self):
         ##make sure the structure of the dataArray corresponds to a fixed schema
@@ -71,116 +88,61 @@ class BaseDistanceCalculator(ABC):
             raise ValueError(f"Unknown distance calculator '{key}'. Available: {available}")
         return model_cls(**kwargs)
 
-    def __init__(self, cache_directory: str | Path | None = None):
-        if cache_directory is not None:
-            cache_directory = Path(cache_directory)
-            cache_directory.parent.mkdir(exist_ok = True, parents = True)
-            logger.debug(f"Distance fields will be cached at {cache_directory}")
-        self.cache_directory = cache_directory
+    def __init__(self, cache_manager: CacheManager | None = None):
+        self.cache_manager = cache_manager
 
-    @staticmethod
-    def _to_jsonable(value):
-        if isinstance(value, np.ndarray):
-            return value.tolist()
-        if isinstance(value, np.generic):
-            return value.item()
-        if isinstance(value, Path):
-            return str(value)
-        if isinstance(value, dict):
-            return {str(key): BaseDistanceCalculator._to_jsonable(val) for key, val in sorted(value.items())}
-        if isinstance(value, (list, tuple)):
-            return [BaseDistanceCalculator._to_jsonable(item) for item in value]
-        return value
-
-    @staticmethod
-    def _array_fingerprint(array: np.ndarray) -> str:
-        contiguous = np.ascontiguousarray(array)
-        digest = hashlib.blake2b(digest_size=16)
-        digest.update(str(contiguous.dtype).encode("utf-8"))
-        digest.update(str(contiguous.shape).encode("utf-8"))
-        digest.update(contiguous.view(np.uint8))
-        return digest.hexdigest()
-
-    def _dem_cache_parameters(self, dem: xr.DataArray) -> dict:
-        dem = self._validate_dem(dem)
-        x = np.asarray(dem.coords["x"].values)
-        y = np.asarray(dem.coords["y"].values)
-        values = np.asarray(dem.values)
-        return {
-            "shape": tuple(dem.shape),
-            "dims": tuple(dem.dims),
-            "x": self._array_fingerprint(x),
-            "y": self._array_fingerprint(y),
-            "values": self._array_fingerprint(values),
-        }
+    def cache_parameters(self) -> dict:
+        return {}
 
     def _distance_cache_parameters(
         self,
-        dem: xr.DataArray,
+        dem: BaseGrid,
         x_coords: Sequence[float],
         y_coords: Sequence[float],
         point_ids: Sequence[Hashable],
     ) -> dict:
         return {
-            "dem": self._dem_cache_parameters(dem),
+            "cache_schema_version": 1,
+            "calculator": self.key(),
+            "calculator_parameters": self.cache_parameters(),
+            "dem_fingerprint": dem.fingerprint,
             "sources": [
                 {"id": str(pid), "x": float(x), "y": float(y)}
                 for x, y, pid in zip(x_coords, y_coords, point_ids)
             ],
         }
 
-    def _build_cache_path(self, distance_params: dict | None = None) -> Path | None:
-        if self.cache_directory is None:
+    def _load_cache(self, cache_params: dict) -> DistanceField | None:
+        if self.cache_manager is None:
             return None
-        distance_params = distance_params or {}
-        cache_params = {
-            "cache_schema_version": 1,
-            "calculator": self.key(),
-            "parameters": distance_params,
-        }
-        serialized = json.dumps(self._to_jsonable(cache_params), sort_keys=True, separators=(",", ":"))
-        cache_id = hashlib.blake2b(serialized.encode("utf-8"), digest_size=16).hexdigest()
-        return self.cache_directory / f"{self.key()}_{cache_id}.zarr"
 
-    def _initialize_cache(self, distance_fields: DistanceField, cache_path: Path | None = None):
-        if cache_path is not None:
-
-            if cache_path.exists():
-                raise ValueError(f"Found already existing cache at {cache_path}")
-            if distance_fields.data is None:
-                logger.warning("Cannot initialize distance cache from an empty DistanceField.")
-                return False
-
+        dataset = self.cache_manager.load_cache(_CACHE_KEY, cache_params)
+        if dataset is not None:
             try:
-                cache_path.parent.mkdir(parents=True, exist_ok=True)
-                logger.debug(f"Initializing new distance cache at {cache_path}")
-                data_name = distance_fields.data.name or "distance"
-                dataset = distance_fields.data.to_dataset(name=data_name)
-                dataset.attrs["distance_type"] = distance_fields.distance_type
-                dataset.to_zarr(cache_path, zarr_format=2)
-                return True
+                return DistanceField.from_dataset(dataset)
             except Exception as e:
-                logger.warning(f"Failed to initialize distance cache at {cache_path} with error: {e}")
-                return False
-
-    def _load_cache(self, cache_path: Path | None = None):
-        if cache_path is not None and cache_path.exists():
-            try:
-                logger.info(f"Loading existing distance cache at {cache_path}")
-                dataset = xr.open_zarr(cache_path)
-                data_vars = list(dataset.data_vars)
-                if len(data_vars) != 1:
-                    raise ValueError(f"Expected exactly one cached distance variable. Got {data_vars}")
-                data = dataset[data_vars[0]]
-                distance_type = dataset.attrs.get("distance_type", data.attrs.get("distance_type", data.name))
-                return DistanceField(distance_type = distance_type, data = data)
-            except Exception as e:
-                logger.warning(f"Failed to load distance cache with error: {e}. Deleting cache and calculating new distance fields")
-                rmtree(cache_path)
+                logger.warning(
+                    "Failed to load distance cache with error: %s. Deleting cache and calculating new distance fields",
+                    e,
+                )
+                self.cache_manager.delete_cache(_CACHE_KEY, cache_params)
         return None
 
+    def _initialize_cache(self, distance_fields: DistanceField, cache_params: dict):
+        if self.cache_manager is None:
+            return False
+        try:
+            self.cache_manager.initialize_cache(
+                distance_fields.to_dataset(),
+                key=_CACHE_KEY,
+                cache_params=cache_params,
+            )
+            return True
+        except Exception as e:
+            logger.warning("Failed to initialize distance cache with error: %s", e)
+            return False
+
     def _validate_point_in_grid(self, x: float, y:float, grid: xr.DataArray) -> bool:
-        grid = self._validate_dem(grid)
         x_values = grid.coords["x"].values
         y_values = grid.coords["y"].values
         return (
@@ -189,7 +151,7 @@ class BaseDistanceCalculator(ABC):
         )
 
     @staticmethod
-    def _validate_dem(dem: xr.DataArray) -> xr.DataArray:
+    def _validate_dem_data(dem: xr.DataArray) -> xr.DataArray:
         if not isinstance(dem, xr.DataArray):
             raise TypeError(
                 f"dem should be a DataArray. Got {type(dem)}"
@@ -217,6 +179,14 @@ class BaseDistanceCalculator(ABC):
             raise ValueError("DEM x/y coordinates must not be empty.")
 
         return dem
+
+    @classmethod
+    def _validate_dem(cls, dem: BaseGrid) -> xr.DataArray:
+        if not isinstance(dem, BaseGrid):
+            raise TypeError(
+                f"dem should be a BaseGrid. Got {type(dem)}"
+            )
+        return cls._validate_dem_data(dem.data)
 
     @staticmethod
     def _validate_source_points(
@@ -247,7 +217,7 @@ class BaseDistanceCalculator(ABC):
     @abstractmethod
     def calculate_distance(
         self,
-        dem: xr.DataArray,
+        dem: BaseGrid,
         x_coords: Sequence[float],
         y_coords: Sequence[float],
         point_ids: Sequence[Hashable] | None = None,
@@ -256,23 +226,22 @@ class BaseDistanceCalculator(ABC):
 
     def calculate_fields(
         self,
-        dem: xr.DataArray,
+        dem: BaseGrid,
         x_coords: Sequence[float],
         y_coords: Sequence[float],
         point_ids: Sequence[Hashable],
     ) -> DistanceField:
-        dem = self._validate_dem(dem)
+        dem_data = self._validate_dem(dem)
         x_coords, y_coords, point_ids = self._validate_source_points(x_coords, y_coords, point_ids)
         point_ids = [str(i) for i in point_ids]
 
         distance_params = self._distance_cache_parameters(dem, x_coords, y_coords, point_ids)
-        cache_path = self._build_cache_path(distance_params)
-        distance_fields = self._load_cache(cache_path)
+        distance_fields = self._load_cache(distance_params)
 
         if distance_fields is None:
             invalid_points = []
             for x, y, pid in zip(x_coords, y_coords, point_ids):
-                point_in_grid = self._validate_point_in_grid(x, y, dem)
+                point_in_grid = self._validate_point_in_grid(x, y, dem_data)
                 if not point_in_grid:
                     invalid_points.append(pid)
             if invalid_points:
@@ -282,6 +251,6 @@ class BaseDistanceCalculator(ABC):
                 )
 
             distance_fields = self.calculate_distance(dem, x_coords, y_coords, point_ids)
-            self._initialize_cache(distance_fields, cache_path)
+            self._initialize_cache(distance_fields, distance_params)
 
         return distance_fields

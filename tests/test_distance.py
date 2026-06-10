@@ -1,8 +1,24 @@
 import numpy as np
 import pytest
+import rioxarray  # noqa: F401
 import xarray as xr
+from pathlib import Path
 
+from src.array.base_grid import BaseGrid
+from src.array.cache import CacheManager
 from src.interpolate.distance import PathDistanceCalculator
+
+
+def _base_grid(data: xr.DataArray) -> BaseGrid:
+    if data.rio.crs is None:
+        data = data.rio.write_crs(4326)
+    return BaseGrid(
+        path=Path("memory"),
+        data=data,
+        aoi=None,
+        resampling_method="nearest",
+        fingerprint=CacheManager.array_fingerprint(data),
+    )
 
 
 def calculate_path_distance(
@@ -20,7 +36,7 @@ def calculate_path_distance(
         max_visibility_distance=max_visibility_distance,
     )
     return calculator.calculate_fields(
-        dem=dem,
+        dem=_base_grid(dem),
         x_coords=x_coords,
         y_coords=y_coords,
         point_ids=point_ids,
@@ -159,14 +175,43 @@ def test_calculate_fields_writes_and_reuses_cache(tmp_path):
     calculator = PathDistanceCalculator(
         connectivity_type=4,
         lam_values=[0],
-        cache_directory=tmp_path,
+        cache_manager=CacheManager(tmp_path),
     )
 
+    dem = _base_grid(dem)
     first = calculator.calculate_fields(dem, [0.0], [0.0], ["station"])
     second = calculator.calculate_fields(dem, [0.0], [0.0], ["station"])
 
     assert len(list(tmp_path.glob("*.zarr"))) == 1
     xr.testing.assert_equal(first.data, second.data)
+
+
+def test_distance_cache_key_includes_base_grid_fingerprint(tmp_path):
+    cache_manager = CacheManager(tmp_path)
+    calculator = PathDistanceCalculator(
+        connectivity_type=4,
+        lam_values=[0],
+        cache_manager=cache_manager,
+    )
+    first_dem = _base_grid(
+        xr.DataArray(
+            np.zeros((3, 3), dtype=float),
+            dims=("y", "x"),
+            coords={"y": [0.0, 1.0, 2.0], "x": [0.0, 1.0, 2.0]},
+        )
+    )
+    second_dem = _base_grid(
+        xr.DataArray(
+            np.ones((3, 3), dtype=float),
+            dims=("y", "x"),
+            coords={"y": [0.0, 1.0, 2.0], "x": [0.0, 1.0, 2.0]},
+        )
+    )
+
+    calculator.calculate_fields(first_dem, [0.0], [0.0], ["station"])
+    calculator.calculate_fields(second_dem, [0.0], [0.0], ["station"])
+
+    assert len(list(tmp_path.glob("*.zarr"))) == 2
 
 
 def test_source_points_outside_dem_raise_clear_error():
@@ -178,4 +223,4 @@ def test_source_points_outside_dem_raise_clear_error():
     calculator = PathDistanceCalculator(connectivity_type=4, lam_values=[0])
 
     with pytest.raises(ValueError, match="outside the supplied DEM extent"):
-        calculator.calculate_fields(dem, [10.0], [0.0], ["station"])
+        calculator.calculate_fields(_base_grid(dem), [10.0], [0.0], ["station"])
