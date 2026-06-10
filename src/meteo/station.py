@@ -156,7 +156,7 @@ class MeteoData:
 
         return pd.concat(frames, ignore_index=True)
 
-    def _project_station_coordinates(self, target_grid: xr.DataArray) -> dict[str, tuple[float, float]]:
+    def get_projected_station_coords(self, target_grid: xr.DataArray) -> dict[str, tuple[float, float]]:
         target_crs = target_grid.rio.crs
         if target_crs is None:
             raise ValueError("Target grid must have an explicit CRS before interpolation jobs can be built.")
@@ -200,7 +200,7 @@ class MeteoData:
         start_ts = pd.to_datetime(start)
         end_ts = pd.to_datetime(end)
         df = df[(df["datetime"] >= start_ts) & (df["datetime"] < end_ts)]
-        projected_coords = self._project_station_coordinates(target_grid)
+        projected_coords = self.get_projected_station_coords(target_grid)
         df["x"] = df["station_id"].map(lambda station_id: projected_coords[station_id][0])
         df["y"] = df["station_id"].map(lambda station_id: projected_coords[station_id][1])
 

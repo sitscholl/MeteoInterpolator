@@ -26,7 +26,6 @@ class InterpolationJob:
     observations: pd.DataFrame
     base_grid: BaseGrid
     crs: CRS | str | int
-    distance_fields: DistanceField | None = None
 
     @property
     def target_grid(self) -> xr.DataArray:
@@ -199,7 +198,7 @@ class Interpolator:
             name="residual",
         )
 
-    def interpolate(self, job: InterpolationJob) -> InterpolationResult | None:
+    def interpolate(self, job: InterpolationJob, distance_fields: DistanceField | None = None) -> InterpolationResult | None:
         if not isinstance(job, InterpolationJob):
             raise TypeError(f"Interpolator.interpolate requires an InterpolationJob. Got {type(job)}")
 
@@ -221,17 +220,16 @@ class Interpolator:
         ##todo: handle failed fits or very poor fits. Either log warnign or return early
         vertical_fit = self.vertical_model.fit(X, y)
         vertical_prediction = vertical_fit.predict(job.target_grid)
-        residual_prediction = None
         prediction = vertical_prediction
 
         if self.residual_model is not None:
-            distance_fields = job.distance_fields
             if distance_fields is None:
                 distance_fields = self.prepare_distance_fields(job)
 
             station_predictions = np.asarray(vertical_fit.predict(X), dtype=float).reshape(-1)
             residuals = y - station_predictions
             residuals = self._residual_array(residuals, ids, x_coords, y_coords)
+            
             residual_prediction = self.residual_model.interpolate(y=residuals, distance_fields=distance_fields)
 
             if residual_prediction is not None:
@@ -243,6 +241,8 @@ class Interpolator:
                     }
                 )
                 prediction = vertical_prediction + residual_prediction
+        else:
+            residual_prediction = None
 
         return InterpolationResult(
             timestamp=job.timestamp,
