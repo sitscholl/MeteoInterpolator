@@ -5,7 +5,8 @@ import yaml
 import logging
 
 from .aoi import AOI
-from .array.base_grid import BaseGrid
+from .array.base_grid import load_base_grid
+from .array.cache import CacheManager
 from .meteo.base import BaseMeteoHandler
 from .resample import MeteoResampler
 from .validate.meteo import MeteoValidator
@@ -51,8 +52,14 @@ class RuntimeContext:
         self.aoi = AOI(**config['aoi'])
         logger.info(f'Initialized aoi with bounds {self.aoi.bounds}')
 
+        ## Cache
+        cache_config = config.get("cache", {})
+        cache_enabled = cache_config.get("enabled", True)
+        self.cache_manager = CacheManager(cache_config.get("cache_dir", "data/cache")) if cache_enabled else None
+
         ## Base Grid
-        self.base_grid = BaseGrid(**config['base_grid'], aoi = self.aoi)
+        base_grid_config = dict(config['base_grid'])
+        self.base_grid = load_base_grid(**base_grid_config, aoi = self.aoi, cache_manager=self.cache_manager)
         logger.info(f"Initialized Base grid {self.base_grid}")
 
         ## Meteo Data

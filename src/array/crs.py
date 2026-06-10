@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 _CRS_ATTR = "crs"
 _CRS_EPSG_ATTR = "crs_epsg"
 
-def attach_crs_metadata(self, data: xr.DataArray | xr.Dataset, crs) -> xr.DataArray | xr.Dataset:
+def attach_crs_metadata(data: xr.DataArray | xr.Dataset, crs) -> xr.DataArray | xr.Dataset:
     crs = CRS.from_user_input(crs)
     data = data.rio.write_crs(crs, inplace=False)
     data.attrs[_CRS_ATTR] = crs.to_string()
@@ -17,7 +17,7 @@ def attach_crs_metadata(self, data: xr.DataArray | xr.Dataset, crs) -> xr.DataAr
         data.attrs[_CRS_EPSG_ATTR] = f"EPSG:{epsg}"
     return data
 
-def load_crs_metadata(self, data: xr.DataArray | xr.Dataset) -> xr.DataArray | xr.Dataset:
+def load_crs_metadata(data: xr.DataArray | xr.Dataset) -> xr.DataArray | xr.Dataset:
     if data.rio.crs is not None:
         return data
 

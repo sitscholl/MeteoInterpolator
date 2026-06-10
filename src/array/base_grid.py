@@ -4,15 +4,13 @@ import rioxarray
 from rasterio.enums import Resampling
 from pyproj import CRS
 import math
-import hashlib
-import json
 from dataclasses import dataclass
 
 import logging
 
 from ..aoi import AOI
 from .cache import CacheManager
-from .crs import load_crs_metadata, attach_crs_metadata
+from .crs import load_crs_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +24,7 @@ _CACHE_KEY = 'base_grid'
 class BaseGrid:
     path: Path
     data: xr.DataArray
-    aoi: AOI
+    aoi: AOI | None
     resampling_method: str
     from_cache: bool = False
 
@@ -100,16 +98,12 @@ def _prepare_spatial_dims(
     data = data.rio.set_spatial_dims(x_dim=x_dim_target, y_dim=y_dim_target, inplace=False)
     return data
 
-def _open_uncached_grid(path: str, var: str | None = None, squeeze: bool = True):
+def _select_data_var(data: xr.DataArray | xr.Dataset, path: str | Path, var: str | None = None) -> xr.DataArray:
+    if isinstance(data, xr.DataArray):
+        if var is not None and data.name not in (None, var):
+            raise ValueError(f"Data variable {var} not found in cached DataArray named {data.name}.")
+        return data
 
-    try:
-        if Path(path).suffix == '.zarr':
-            data = xr.open_zarr(path)
-        else:
-            data = xr.open_dataset(path)
-    except Exception as e:
-        logger.exception(f"Error opending base grid at {path}: {e}")
-    
     available_vars = [var_name for var_name in data.data_vars.keys() if var_name != "spatial_ref"]
     if var is not None:
         if var not in data.data_vars:
@@ -124,7 +118,20 @@ def _open_uncached_grid(path: str, var: str | None = None, squeeze: bool = True)
 
     if "spatial_ref" in data:
         selected = selected.assign_coords(spatial_ref=data["spatial_ref"])
-    data = selected
+    return selected
+
+def _open_uncached_grid(path: str, var: str | None = None, squeeze: bool = True):
+
+    try:
+        if Path(path).suffix == '.zarr':
+            data = xr.open_zarr(path)
+        else:
+            data = xr.open_dataset(path)
+    except Exception as e:
+        logger.exception(f"Error opending base grid at {path}: {e}")
+        raise
+
+    data = _select_data_var(data, path=path, var=var)
 
     data = load_crs_metadata(data) #try to get crs info
 
@@ -156,14 +163,14 @@ def generate_cache_payload(
     path: Path,
     target_crs: int | None,
     target_res: int | float | tuple[float, float] | None,
-    crs: int | None,
+    original_crs: int | None,
     x_dim: str | None,
     y_dim: str | None,
     aoi: AOI | None,
     aoi_buffer_m: int | float | None,
     resampling_method: str | Resampling,
     **kwargs
-) -> Path:
+) -> dict:
     if isinstance(target_res, (int, float)):
         target_res = (float(target_res), float(target_res))
     elif target_res is not None:
@@ -191,7 +198,7 @@ def generate_cache_payload(
         "target_res": target_res,
         "target_x_dim": _TARGET_X_DIM,
         "target_y_dim": _TARGET_Y_DIM,
-        "crs": crs,
+        "original_crs": original_crs,
         "x_dim": x_dim,
         "y_dim": y_dim,
         "aoi": aoi_info,
@@ -199,15 +206,7 @@ def generate_cache_payload(
         "resampling_method": resampling_method,
     }
 
-def _prepare_loaded_array(data, aoi, aoi_buffer_m, target_crs, x_dim, y_dim, target_res, needs_reprojection, resampling_method):
-    data = _prepare_spatial_dims(
-        data,
-        x_dim=x_dim,
-        y_dim=y_dim,
-        x_dim_target=_TARGET_X_DIM,
-        y_dim_target=_TARGET_Y_DIM,
-    )
-
+def _prepare_loaded_array(data, aoi, aoi_buffer_m, target_crs, target_res, needs_reprojection, resampling_method):
     # Filter before reprojecting
     if aoi is not None:
         if needs_reprojection:
@@ -236,11 +235,11 @@ def _prepare_loaded_array(data, aoi, aoi_buffer_m, target_crs, x_dim, y_dim, tar
             data = aoi.filter_bbox(data)
 
     return data
-    
+
 def load_base_grid(
     path: str | Path,
-    target_crs: int, 
-    target_res: int | float | tuple[float, float], 
+    target_crs: int | None = None, 
+    target_res: int | float | tuple[float, float] | None = None, 
     original_crs: int | None = None,
     aoi: AOI | None = None, 
     aoi_buffer_m: int | float | None = None,
@@ -249,27 +248,42 @@ def load_base_grid(
     resampling_method: str | Resampling = 'bilinear',
     cache_manager: CacheManager | None = None,
     **kwargs
-    ):
+    ) -> BaseGrid:
     
     data = None
     from_cache = False
-    cache_payload = generate_cache_payload()
+
+    path = Path(path)
+    cache_payload = generate_cache_payload(
+        path=path,
+        target_crs=target_crs,
+        target_res=target_res,
+        original_crs=original_crs,
+        x_dim=x_dim,
+        y_dim=y_dim,
+        aoi=aoi,
+        aoi_buffer_m=aoi_buffer_m,
+        resampling_method=resampling_method,
+        **kwargs,
+    )
     if cache_manager is not None:
         data = cache_manager.load_cache(_CACHE_KEY, cache_payload)
 
     if data is not None:
-        path = cache_manager._build_cache_path(_CACHE_KEY, cache_payload)
-        logger.info(f"Using cached base grid from {path}")
+        cache_path = cache_manager._build_cache_path(_CACHE_KEY, cache_payload)
+        logger.info(f"Using cached base grid from {cache_path}")
+        data = _select_data_var(data, path=cache_path, var=kwargs.get("var"))
+        data = load_crs_metadata(data)
         
         if data.rio.crs is None:
             raise ValueError(
-                f"Base grid loaded from {path} does not define a CRS. "
+                f"Base grid loaded from {cache_path} does not define a CRS. "
                 "Rebuild the cache with CRS metadata."
             )
         if target_crs is not None and CRS.from_user_input(data.rio.crs) != CRS.from_user_input(target_crs):
             raise ValueError(
                 f"Cached base grid CRS {data.rio.crs} does not match requested target_crs EPSG:{target_crs}. "
-                f"Delete cache at {path} and rebuild it."
+                f"Delete cache at {cache_path} and rebuild it."
             )
 
         data = _prepare_spatial_dims(
@@ -283,20 +297,28 @@ def load_base_grid(
         from_cache = True
 
     else:
-        data = _open_uncached_grid(path)
+        data = _open_uncached_grid(path, **kwargs)
+        data = _prepare_spatial_dims(
+            data,
+            x_dim=x_dim,
+            y_dim=y_dim,
+            x_dim_target=_TARGET_X_DIM,
+            y_dim_target=_TARGET_Y_DIM,
+        )
         data_crs = data.rio.crs
 
         if original_crs is None and data_crs is None:
             raise ValueError(
-                "Dataset crs could not be loaded when opening file. Please provide crs manually in config via crs key."
+                "Dataset crs could not be loaded when opening file. Please provide original_crs manually in config."
             )
 
         if data_crs is None:
             data = data.rio.write_crs(original_crs, inplace = False)
+            data_crs = data.rio.crs
 
         if original_crs is not None and CRS.from_user_input(data_crs) != CRS.from_user_input(original_crs):
                 logger.warning(
-                    f"Provided crs does not correspond to dataset crs and will be ignored. {original_crs} vs {data_crs}"
+                    f"Provided original_crs does not correspond to dataset crs and will be ignored. {original_crs} vs {data_crs}"
                 )
         if target_crs is None:
             target_crs = data_crs
@@ -307,8 +329,6 @@ def load_base_grid(
             data, 
             aoi = aoi, 
             aoi_buffer_m = aoi_buffer_m, 
-            x_dim = x_dim,
-            y_dim = y_dim,
             target_crs = target_crs, 
             target_res = target_res, 
             needs_reprojection = needs_reprojection,
@@ -326,5 +346,6 @@ def load_base_grid(
         path = path,
         data = data,
         aoi = aoi,
+        resampling_method = resampling_method.name.lower() if isinstance(resampling_method, Resampling) else str(resampling_method).lower(),
         from_cache = from_cache
     )

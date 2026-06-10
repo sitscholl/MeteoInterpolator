@@ -9,9 +9,13 @@ meteo_data:
 base_grid:
   path: "https://files.isimip.org/ISIMIP3a/InputData/climate/atmosphere/obsclim/global/daily/historical/CHELSA-W5E5/chelsa-w5e5_obsclim_orog_30arcsec_global.nc#mode=bytes"
   var: orog
-  crs: 4326
+  original_crs: 4326
   target_crs: 32532
   aoi_buffer_m: 5000
+
+cache:
+  enabled: true
+  cache_dir: data/cache
 
 aoi:
   minx: 10
