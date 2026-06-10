@@ -3,8 +3,6 @@ import logging
 import numpy as np
 import xarray as xr
 
-from .distance import DistanceField
-
 logger = logging.getLogger(__name__)
 
 class InverseDistanceWeighting:
@@ -28,10 +26,23 @@ class InverseDistanceWeighting:
         if array.ndim != 1:
             raise ValueError(f"Input residuals must be one-dimensional over id. Got {array.dims}")
 
+    def _validate_distance_field(self, distance_field: xr.DataArray):
+        if not isinstance(distance_field, xr.DataArray):
+            raise ValueError(f"distance_field must be an xarray DataArray. Got {type(distance_field)}")
+        if "id" not in distance_field.dims or distance_field.sizes["id"] == 0:
+            raise ValueError(f"distance_field must have an id dimension with length > 0. Got {distance_field.dims}")
+        if distance_field.ndim < 2:
+            raise ValueError(f"distance_field must include at least one target dimension besides id. Got {distance_field.dims}")
+        if "lam_value" in distance_field.dims:
+            raise ValueError(
+                "InverseDistanceWeighting expects a distance field for a single lambda value. "
+                "Select lam_value before calling interpolate."
+            )
+
     def interpolate(self, y: xr.DataArray, distance_field: xr.DataArray):
         
         self._validate_input_array(y)
-        self._validate_input_weights(distance_field)
+        self._validate_distance_field(distance_field)
 
         distance_ids = set(distance_field.id.values)
         common_ids = [pid for pid in y.id.values if pid in distance_ids]

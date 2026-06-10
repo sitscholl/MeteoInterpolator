@@ -120,7 +120,6 @@ def test_interpolator_returns_result_and_adds_idw_residuals():
         observations=observations,
         base_grid=_base_grid(target_grid),
         crs=4326,
-        distance_fields=DistanceField("test_distance", distances),
     )
     interpolator = Interpolator(
         vertical_model=LinearVerticalModel(),
@@ -129,7 +128,7 @@ def test_interpolator_returns_result_and_adds_idw_residuals():
         min_sample_size=3,
     )
 
-    result = interpolator.interpolate(job)
+    result = interpolator.interpolate(job, distance_fields=DistanceField("test_distance", distances))
 
     assert result.timestamp == pd.Timestamp("2026-05-13")
     assert result.parameter == "tair_2m"

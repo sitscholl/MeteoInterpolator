@@ -149,7 +149,7 @@ class Interpolator:
     def prepare_distance_fields(self, job: InterpolationJob) -> DistanceField:
         if self.distance_calculator is None:
             raise ValueError(
-                "Residual interpolation requires distance_fields on the InterpolationJob "
+                "Residual interpolation requires distance_fields passed to interpolate "
                 "or a configured distance calculator."
             )
         _, _, x_coords, y_coords, ids = job.to_arrays()
@@ -160,21 +160,33 @@ class Interpolator:
             point_ids=ids,
         )
 
-    def _check_grid_alignment(self, grid: xr.DataArray, distance_fields: DistanceField):
-        if not isinstance(distance_fields, DistanceField):
-            raise ValueError(f"distance_fields must be a DistanceField. Got {type(distance_fields)}")
-        if distance_fields.data is None:
-            raise ValueError("distance_fields.data must not be None for residual interpolation.")
+    @staticmethod
+    def _select_distance_field(distance_fields: DistanceField | xr.DataArray) -> xr.DataArray:
+        if isinstance(distance_fields, DistanceField):
+            if distance_fields.data is None:
+                raise ValueError("distance_fields.data must not be None for residual interpolation.")
+            distance_data = distance_fields.data
+        elif isinstance(distance_fields, xr.DataArray):
+            distance_data = distance_fields
+        else:
+            raise ValueError(f"distance_fields must be a DistanceField or xarray DataArray. Got {type(distance_fields)}")
 
-        distance_data = distance_fields.data
+        if "lam_value" in distance_data.dims:
+            return distance_data.isel(lam_value=0)
+        return distance_data
+
+    def _check_grid_alignment(self, grid: xr.DataArray, distance_field: xr.DataArray):
+        if not isinstance(distance_field, xr.DataArray):
+            raise ValueError(f"distance_field must be an xarray DataArray. Got {type(distance_field)}")
+
         for coord_name in ("x", "y"):
             if coord_name not in grid.coords:
                 raise ValueError(f"Prediction grid is missing coordinate '{coord_name}'.")
-            if coord_name not in distance_data.coords:
+            if coord_name not in distance_field.coords:
                 raise ValueError(f"Distance fields are missing coordinate '{coord_name}'.")
 
             grid_values = np.asarray(grid.coords[coord_name].values)
-            distance_values = np.asarray(distance_data.coords[coord_name].values)
+            distance_values = np.asarray(distance_field.coords[coord_name].values)
             if grid_values.shape != distance_values.shape or not np.allclose(
                 grid_values,
                 distance_values,
@@ -198,7 +210,11 @@ class Interpolator:
             name="residual",
         )
 
-    def interpolate(self, job: InterpolationJob, distance_fields: DistanceField | None = None) -> InterpolationResult | None:
+    def interpolate(
+        self,
+        job: InterpolationJob,
+        distance_fields: DistanceField | xr.DataArray | None = None,
+    ) -> InterpolationResult | None:
         if not isinstance(job, InterpolationJob):
             raise TypeError(f"Interpolator.interpolate requires an InterpolationJob. Got {type(job)}")
 
@@ -225,15 +241,16 @@ class Interpolator:
         if self.residual_model is not None:
             if distance_fields is None:
                 distance_fields = self.prepare_distance_fields(job)
+            distance_field = self._select_distance_field(distance_fields)
 
             station_predictions = np.asarray(vertical_fit.predict(X), dtype=float).reshape(-1)
             residuals = y - station_predictions
             residuals = self._residual_array(residuals, ids, x_coords, y_coords)
 
-            residual_prediction = self.residual_model.interpolate(y=residuals, distance_field=distance_fields.isel(lam = 0))
+            residual_prediction = self.residual_model.interpolate(y=residuals, distance_field=distance_field)
 
             if residual_prediction is not None:
-                self._check_grid_alignment(vertical_prediction, distance_fields)
+                self._check_grid_alignment(vertical_prediction, distance_field)
                 residual_prediction = residual_prediction.assign_coords(
                     {
                         "x": vertical_prediction.x.values,

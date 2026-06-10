@@ -106,23 +106,38 @@ class InterpolationWorkflow:
             else None
         )
 
+        jobs = list(meteo_data.build_jobs(start, end, param, base_grid = self.context.base_grid))
+
         ## Calculate distance fields
         distance_calculator = self.context.interpolator.distance_calculator
         if distance_calculator is not None:
-            run_stations = meteo_data.get_projected_station_coords(self.context.base_grid)
-            run_stations = dict(sorted(run_stations.items())) #sort by station id
-            run_distance_fields = distance_calculator.calculate_fields(
-                self.context.base_grid, 
-                [p[0] for p in run_stations.values()], 
-                [p[1] for p in run_stations.values()], 
-                list(run_stations.keys())
+            job_station_ids = sorted(
+                {
+                    str(station_id)
+                    for job in jobs
+                    for station_id in job.observations["station_id"].values
+                }
             )
+            if job_station_ids:
+                projected_stations = meteo_data.get_projected_station_coords(self.context.base_grid)
+                run_stations = {
+                    station_id: projected_stations[station_id]
+                    for station_id in job_station_ids
+                }
+                run_distance_fields = distance_calculator.calculate_fields(
+                    self.context.base_grid, 
+                    [p[0] for p in run_stations.values()], 
+                    [p[1] for p in run_stations.values()], 
+                    list(run_stations.keys())
+                )
+            else:
+                run_distance_fields = None
         else:
             run_distance_fields = None
 
         ## Interpolate
         results = []
-        for job in meteo_data.build_jobs(start, end, param, base_grid = self.context.base_grid):
+        for job in jobs:
 
             logger.info('Starting interpolation job %s', job)
 
