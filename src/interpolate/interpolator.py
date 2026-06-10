@@ -229,8 +229,8 @@ class Interpolator:
             station_predictions = np.asarray(vertical_fit.predict(X), dtype=float).reshape(-1)
             residuals = y - station_predictions
             residuals = self._residual_array(residuals, ids, x_coords, y_coords)
-            
-            residual_prediction = self.residual_model.interpolate(y=residuals, distance_fields=distance_fields)
+
+            residual_prediction = self.residual_model.interpolate(y=residuals, distance_field=distance_fields.isel(lam = 0))
 
             if residual_prediction is not None:
                 self._check_grid_alignment(vertical_prediction, distance_fields)

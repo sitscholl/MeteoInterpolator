@@ -28,30 +28,26 @@ class InverseDistanceWeighting:
         if array.ndim != 1:
             raise ValueError(f"Input residuals must be one-dimensional over id. Got {array.dims}")
 
-    def interpolate(self, y: xr.DataArray, distance_fields: DistanceField):
+    def interpolate(self, y: xr.DataArray, distance_field: xr.DataArray):
         
         self._validate_input_array(y)
-        if not isinstance(distance_fields, DistanceField):
-            raise ValueError(f"distance_fields must be a DistanceField. Got {type(distance_fields)}")
-        distance_fields = distance_fields.data
-        if distance_fields is None:
-            raise ValueError("distance_fields.data must not be None")
+        self._validate_input_weights(distance_field)
 
-        distance_ids = set(distance_fields.id.values)
+        distance_ids = set(distance_field.id.values)
         common_ids = [pid for pid in y.id.values if pid in distance_ids]
         if len(common_ids) == 0:
             logger.warning("No common ids between y input and distance_fields array. y-values cannot be interpolated")
             return None
 
-        missing_ids = set(y.id.values) - set(distance_fields.id.values)
+        missing_ids = set(y.id.values) - set(distance_field.id.values)
         if len(missing_ids) > 0:
             logger.warning(f"No distance fields for the following ids were provided. They will not be considered in the interpolation: {missing_ids}")
         
         y = y.sel(id = common_ids)
-        distance_fields = distance_fields.sel(id = common_ids)
+        distance_field = distance_field.sel(id = common_ids)
 
-        output_dims = tuple(dim for dim in distance_fields.dims if dim != "id")
-        distances = distance_fields.transpose("id", *output_dims)
+        output_dims = tuple(dim for dim in distance_field.dims if dim != "id")
+        distances = distance_field.transpose("id", *output_dims)
         distance_values = np.asarray(distances.values, dtype=float)
         residual_values = np.asarray(y.values, dtype=float)
 
@@ -106,6 +102,6 @@ class InverseDistanceWeighting:
                 "description": "Inverse distance weighted residual interpolation.",
                 "neighbours": n_neighbours,
                 "weight_exponent": self.weight_exponent,
-                "distance_type": distance_fields.attrs.get("distance_type"),
+                "distance_type": distance_field.attrs.get("distance_type"),
             },
         )
