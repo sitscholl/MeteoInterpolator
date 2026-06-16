@@ -11,6 +11,7 @@ from .meteo.base import BaseMeteoHandler
 from .resample import MeteoResampler
 from .validate.meteo import MeteoValidator
 from .datagaps import Gapfiller
+from .interpolate import BaseDistanceCalculator
 from .interpolate import Interpolator
 from .array.writer import GridWriter
 from .database.db import InterpolationDB
@@ -91,10 +92,23 @@ class RuntimeContext:
         else:
             logger.info("Gapfiller initialized")
 
+        ##Distance Calculator
+        distance_config = config.get('distance')
+        if distance_config is None:
+            self.distance_calculator = None
+        else:
+            distance_config = dict(distance_config)
+            distance_handler = distance_config.pop("type")
+            self.distance_calculator = BaseDistanceCalculator.create(
+                distance_handler,
+                cache_manager=self.cache_manager,
+                **distance_config,
+            )
+
         ## Interpolator
         self.interpolator = Interpolator.from_config(
-            config['interpolation'],
-            cache_manager=self.cache_manager,
+            base_grid = self.base_grid,
+            config = config['interpolation'],
         )
 
         ## Grid Writer

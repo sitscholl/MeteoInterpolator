@@ -8,9 +8,8 @@ from dataclasses import dataclass
 import logging
 
 from ..array.base_grid import BaseGrid
-from ..array.cache import CacheManager
 from .vertical import BaseVerticalModel
-from .distance import BaseDistanceCalculator, DistanceField
+from .distance import DistanceField
 from .idw import InverseDistanceWeighting
 from .regions import InterpolationRegions
 from .cv import CrossValidator
@@ -24,31 +23,14 @@ class InterpolationJob:
     timestamp: pd.Timestamp
     parameter: str
     observations: pd.DataFrame
-    base_grid: BaseGrid
     crs: CRS | str | int
-
-    @property
-    def target_grid(self) -> xr.DataArray:
-        return self.base_grid.data
 
     @property
     def required_columns(self):
         return [self.parameter, *_REQUIRED_COLUMNS]
 
     def __post_init__(self):
-        if not isinstance(self.base_grid, BaseGrid):
-            raise TypeError(f"InterpolationJob base_grid must be a BaseGrid. Got {type(self.base_grid)}")
-        if not isinstance(self.target_grid, xr.DataArray):
-            raise TypeError(f"InterpolationJob target_grid must be an xarray DataArray. Got {type(self.target_grid)}")
-        if "x" not in self.target_grid.dims or "y" not in self.target_grid.dims:
-            raise ValueError(f"InterpolationJob target_grid must contain x and y dimensions. Got {self.target_grid.dims}")
-        if self.target_grid.rio.crs is None:
-            raise ValueError("InterpolationJob target_grid must have an explicit CRS.")
-
         crs = CRS.from_user_input(self.crs)
-        target_crs = CRS.from_user_input(self.target_grid.rio.crs)
-        if crs != target_crs:
-            raise ValueError(f"InterpolationJob CRS {crs.to_string()} does not match target grid CRS {target_crs.to_string()}.")
         object.__setattr__(self, "crs", crs)
 
         for req_col in self.required_columns:
@@ -83,42 +65,40 @@ class InterpolationResult:
 
 @dataclass
 class Interpolator:
+    base_grid: BaseGrid
     vertical_model: BaseVerticalModel
-    distance_calculator: BaseDistanceCalculator | None
     residual_model: InverseDistanceWeighting | None = None
     regions: InterpolationRegions | None = None
     cross_validator: CrossValidator | None = None
     min_sample_size: int = 3
 
+    @property
+    def target_grid(self) -> xr.DataArray:
+        return self.base_grid.data
+
+    def __post_init__(self):
+        if not isinstance(self.base_grid, BaseGrid):
+            raise TypeError(f"Interpolator base_grid must be a BaseGrid. Got {type(self.base_grid)}")
+        if not isinstance(self.target_grid, xr.DataArray):
+            raise TypeError(f"Interpolator target_grid must be an xarray DataArray. Got {type(self.target_grid)}")
+        if "x" not in self.target_grid.dims or "y" not in self.target_grid.dims:
+            raise ValueError(f"Interpolator target_grid must contain x and y dimensions. Got {self.target_grid.dims}")
+        if self.target_grid.rio.crs is None:
+            raise ValueError("Interpolator target_grid must have an explicit CRS.")
+
     @classmethod
     def from_config(
         cls,
+        base_grid: BaseGrid,
         config: dict,
-        cache_manager: CacheManager | None = None,
     ):
         vertical_config = dict(config["vertical_model"])
         vertical_handler = vertical_config.pop("type")
         vertical_model = BaseVerticalModel.create(vertical_handler, **vertical_config)
 
-        ##Residual interpolation
-        distance_config = config.get('distance')
-        if distance_config is None:
-            logger.info("No distance calculator configuration provided. Residuals will not be interpolated")
-            distance_calculator = None
-        else:
-            distance_config = dict(distance_config)
-            distance_handler = distance_config.pop("type")
-            distance_calculator = BaseDistanceCalculator.create(
-                distance_handler,
-                cache_manager=cache_manager,
-                **distance_config,
-            )
-
         idw_config = config.get('inverse_distance_weighting')
         if idw_config is None:
-            logger.warning("No inverse distance weigthing configuration provided. Residuals will not be interpolated")
             residual_model = None
-            distance_calculator = None
         else:
             idw_config = dict(idw_config)
             residual_model = InverseDistanceWeighting(**idw_config)
@@ -138,30 +118,19 @@ class Interpolator:
         min_sample_size = config.get('min_sample_size', 3)
 
         return cls(
+            base_grid = base_grid,
             vertical_model = vertical_model, 
-            distance_calculator = distance_calculator, 
             residual_model = residual_model, 
             regions = interpolation_regions, 
             cross_validator = cross_validator,
             min_sample_size = min_sample_size
             )
 
-    def prepare_distance_fields(self, job: InterpolationJob) -> DistanceField:
-        if self.distance_calculator is None:
-            raise ValueError(
-                "Residual interpolation requires distance_fields passed to interpolate "
-                "or a configured distance calculator."
-            )
-        _, _, x_coords, y_coords, ids = job.to_arrays()
-        return self.distance_calculator.calculate_fields(
-            dem=job.base_grid,
-            x_coords=x_coords,
-            y_coords=y_coords,
-            point_ids=ids,
-        )
-
     @staticmethod
-    def _select_distance_field(distance_fields: DistanceField | xr.DataArray) -> xr.DataArray:
+    def _select_distance_field(
+        distance_fields: DistanceField | xr.DataArray,
+        lam_value: float | int | None = None,
+    ) -> xr.DataArray:
         if isinstance(distance_fields, DistanceField):
             if distance_fields.data is None:
                 raise ValueError("distance_fields.data must not be None for residual interpolation.")
@@ -172,8 +141,18 @@ class Interpolator:
             raise ValueError(f"distance_fields must be a DistanceField or xarray DataArray. Got {type(distance_fields)}")
 
         if "lam_value" in distance_data.dims:
+            if lam_value is not None:
+                return distance_data.sel(lam_value=lam_value)
             return distance_data.isel(lam_value=0)
         return distance_data
+
+    def _check_job_crs(self, job: InterpolationJob):
+        target_crs = CRS.from_user_input(self.target_grid.rio.crs)
+        if job.crs != target_crs:
+            raise ValueError(
+                f"InterpolationJob CRS {job.crs.to_string()} does not match "
+                f"target grid CRS {target_crs.to_string()}."
+            )
 
     def _check_grid_alignment(self, grid: xr.DataArray, distance_field: xr.DataArray):
         if not isinstance(distance_field, xr.DataArray):
@@ -217,11 +196,13 @@ class Interpolator:
     ) -> InterpolationResult | None:
         if not isinstance(job, InterpolationJob):
             raise TypeError(f"Interpolator.interpolate requires an InterpolationJob. Got {type(job)}")
+        self._check_job_crs(job)
 
         if self.cross_validator is not None:
             raise NotImplementedError("Cross Validation has not been implemented yet")
         else:
-            cv_results = None     
+            cv_results = None
+
         y, X, x_coords, y_coords, ids = job.to_arrays()
         
         if len(y) < self.min_sample_size:
@@ -235,12 +216,13 @@ class Interpolator:
 
         ##todo: handle failed fits or very poor fits. Either log warnign or return early
         vertical_fit = self.vertical_model.fit(X, y)
-        vertical_prediction = vertical_fit.predict(job.target_grid)
+        vertical_prediction = vertical_fit.predict(self.target_grid)
         prediction = vertical_prediction
 
-        if self.residual_model is not None:
-            if distance_fields is None:
-                distance_fields = self.prepare_distance_fields(job)
+        if self.residual_model is not None and distance_fields is None:
+            logger.warning("Residual model available but no distance fields provided. Residuals will not be interpolated.")
+
+        if self.residual_model is not None and distance_fields is not None:
             distance_field = self._select_distance_field(distance_fields)
 
             station_predictions = np.asarray(vertical_fit.predict(X), dtype=float).reshape(-1)

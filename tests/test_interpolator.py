@@ -52,7 +52,7 @@ def test_residual_array_uses_id_dimension_with_station_coordinates():
     assert residuals.y.values.tolist() == [30.0, 40.0]
 
 
-def test_interpolation_job_requires_base_grid_with_matching_crs():
+def test_interpolator_requires_base_grid_with_matching_crs():
     target_grid = xr.DataArray(
         [[0.0]],
         dims=("y", "x"),
@@ -69,22 +69,23 @@ def test_interpolation_job_requires_base_grid_with_matching_crs():
     )
 
     with pytest.raises(TypeError, match="base_grid must be a BaseGrid"):
-        InterpolationJob(
-            timestamp=pd.Timestamp("2026-05-13"),
-            parameter="tair_2m",
-            observations=observations,
+        Interpolator(
             base_grid=target_grid,
-            crs=4326,
+            vertical_model=LinearVerticalModel(),
         )
 
+    job = InterpolationJob(
+        timestamp=pd.Timestamp("2026-05-13"),
+        parameter="tair_2m",
+        observations=observations,
+        crs=4326,
+    )
+    interpolator = Interpolator(
+        base_grid=_base_grid(target_grid.rio.write_crs(3857)),
+        vertical_model=LinearVerticalModel(),
+    )
     with pytest.raises(ValueError, match="does not match"):
-        InterpolationJob(
-            timestamp=pd.Timestamp("2026-05-13"),
-            parameter="tair_2m",
-            observations=observations,
-            base_grid=_base_grid(target_grid.rio.write_crs(3857)),
-            crs=4326,
-        )
+        interpolator.interpolate(job)
 
 
 def test_interpolator_returns_result_and_adds_idw_residuals():
@@ -118,12 +119,11 @@ def test_interpolator_returns_result_and_adds_idw_residuals():
         timestamp=pd.Timestamp("2026-05-13"),
         parameter="tair_2m",
         observations=observations,
-        base_grid=_base_grid(target_grid),
         crs=4326,
     )
     interpolator = Interpolator(
+        base_grid=_base_grid(target_grid),
         vertical_model=LinearVerticalModel(),
-        distance_calculator=None,
         residual_model=InverseDistanceWeighting(neighbours=1),
         min_sample_size=3,
     )

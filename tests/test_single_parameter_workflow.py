@@ -5,7 +5,7 @@ from pathlib import Path
 
 from src.array.base_grid import BaseGrid
 from src.array.cache import CacheManager
-from src.meteo.station import MeteoData
+from src.meteo.types import MeteoData
 from src.validate.date import localize_datetime_string
 
 

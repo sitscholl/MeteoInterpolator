@@ -3,7 +3,7 @@ import pandas as pd
 import logging
 from typing import Callable, Any, Iterable
 
-from .meteo.station import MeteoData
+from .meteo.types import MeteoData
 
 logger = logging.getLogger(__name__)
 

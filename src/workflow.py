@@ -7,7 +7,7 @@ import xarray as xr
 import logging
 
 from .runtime import RuntimeContext
-from .meteo.station import MeteoData
+from .meteo.types import MeteoData
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,33 @@ class InterpolationWorkflow:
         else:
             data = data.assign_coords(time=[pd.Timestamp(interp_date)])
         return data
+
+    def prepare_distance_fields(self, jobs, meteo_data):
+        distance_calculator = self.context.distance_calculator
+        if distance_calculator is not None:
+            job_station_ids = sorted(
+                {
+                    str(station_id)
+                    for job in jobs
+                    for station_id in job.observations["station_id"].values
+                }
+            )
+            if job_station_ids:
+                projected_stations = meteo_data.get_projected_station_coords(self.context.base_grid.data)
+                run_stations = {
+                    station_id: projected_stations[station_id]
+                    for station_id in job_station_ids
+                }
+                return distance_calculator.calculate_fields(
+                    self.context.base_grid, 
+                    [p[0] for p in run_stations.values()], 
+                    [p[1] for p in run_stations.values()], 
+                    list(run_stations.keys())
+                )
+            else:
+                return None
+        else:
+            return None
 
     async def run(self, param: str, start: datetime, end: datetime):       
         self.timestamp = datetime.now()
@@ -99,7 +126,6 @@ class InterpolationWorkflow:
             groupby_cols = ['station_id']
         )
 
-        logger.info(f"Interpolating parameter {param} over period {start} - {end} with frequency {_FREQ}")
         grid_writer = (
             self.context.grid_writer.initialize(param=param, start=start, end=end, freq=_FREQ)
             if self.context.grid_writer is not None
@@ -108,34 +134,10 @@ class InterpolationWorkflow:
 
         jobs = list(meteo_data.build_jobs(start, end, param, base_grid = self.context.base_grid))
 
-        ## Calculate distance fields
-        distance_calculator = self.context.interpolator.distance_calculator
-        if distance_calculator is not None:
-            job_station_ids = sorted(
-                {
-                    str(station_id)
-                    for job in jobs
-                    for station_id in job.observations["station_id"].values
-                }
-            )
-            if job_station_ids:
-                projected_stations = meteo_data.get_projected_station_coords(self.context.base_grid)
-                run_stations = {
-                    station_id: projected_stations[station_id]
-                    for station_id in job_station_ids
-                }
-                run_distance_fields = distance_calculator.calculate_fields(
-                    self.context.base_grid, 
-                    [p[0] for p in run_stations.values()], 
-                    [p[1] for p in run_stations.values()], 
-                    list(run_stations.keys())
-                )
-            else:
-                run_distance_fields = None
-        else:
-            run_distance_fields = None
+        run_distance_fields = self.prepare_distance_fields(jobs, meteo_data)
 
         ## Interpolate
+        logger.info(f"Interpolating parameter {param} over period {start} - {end} with frequency {_FREQ}")
         results = []
         for job in jobs:
 
@@ -145,7 +147,6 @@ class InterpolationWorkflow:
             if interpolation_result is None:
                 continue
 
-            #todo: do this inside interpolator and directly return prediction with correct structure
             output_grid = self._prepare_grid_for_output(interpolation_result.prediction, job.parameter, job.timestamp)
             if grid_writer is not None:
                 grid_writer.write(output_grid)

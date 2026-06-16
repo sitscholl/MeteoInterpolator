@@ -3,7 +3,7 @@ import inspect
 import pandas as pd
 from typing import Any, Dict
 
-from .station import Station
+from .types import Station
 from ..validate.meteo import MeteoValidator
 
 class BaseMeteoHandler(ABC):

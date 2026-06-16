@@ -222,7 +222,6 @@ class MeteoData:
                 timestamp = ts,
                 parameter = param,
                 observations = obs,
-                base_grid = base_grid,
                 crs = target_grid.rio.crs,
             )
             yield job
