@@ -43,7 +43,7 @@ interpolation:
     weight_exponent: 2
 
 cross_validation:
-  enabled: false
+  enabled: true
   cv: loo
   scoring: [mae, rmse, bias]
   scopes: [overall]
@@ -53,6 +53,10 @@ cross_validation:
   apply_best_params: true
   param_grid:
     lambda: [0, 25, 50, 75, 100, 150, 200]
+
+cache:
+  enabled: true
+  cache_dir: data/cache
 
 output:
   format: tiff

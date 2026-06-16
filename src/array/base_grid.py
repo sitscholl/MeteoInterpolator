@@ -1,4 +1,5 @@
 from pathlib import Path
+from urllib.parse import urlparse
 import xarray as xr
 import rioxarray
 from rasterio.enums import Resampling
@@ -20,9 +21,24 @@ _TARGET_X_DIM = 'x'
 _TARGET_Y_DIM = 'y'
 _CACHE_KEY = 'base_grid'
 
+def _is_remote_uri(path: str | Path) -> bool:
+    parsed = urlparse(str(path))
+    return parsed.scheme in {"http", "https", "s3", "gs", "az"}
+
+def _source_identity(path: str | Path) -> str:
+    if _is_remote_uri(path):
+        return str(path)
+    return str(Path(path).resolve())
+
+def _source_suffix(path: str | Path) -> str:
+    text = str(path)
+    if _is_remote_uri(text):
+        return Path(urlparse(text).path).suffix
+    return Path(text).suffix
+
 @dataclass(frozen = True)
 class BaseGrid:
-    path: Path
+    path: str | Path
     data: xr.DataArray
     aoi: AOI | None
     resampling_method: str
@@ -121,13 +137,21 @@ def _select_data_var(data: xr.DataArray | xr.Dataset, path: str | Path, var: str
         selected = selected.assign_coords(spatial_ref=data["spatial_ref"])
     return selected
 
-def _open_uncached_grid(path: str, var: str | None = None, squeeze: bool = True):
+def _open_uncached_grid(
+    path: str | Path,
+    var: str | None = None,
+    squeeze: bool = True,
+    engine: str | None = None,
+):
 
     try:
-        if Path(path).suffix == '.zarr':
+        if _source_suffix(path) == '.zarr':
             data = xr.open_zarr(path)
         else:
-            data = xr.open_dataset(path)
+            open_kwargs = {}
+            if engine is not None:
+                open_kwargs["engine"] = engine
+            data = xr.open_dataset(path, **open_kwargs)
     except Exception as e:
         logger.exception(f"Error opending base grid at {path}: {e}")
         raise
@@ -184,6 +208,7 @@ def generate_cache_payload(
 
     var = kwargs.get("var")
     squeeze = kwargs.get("squeeze", True)
+    engine = kwargs.get("engine")
 
     aoi_info = None
     if aoi is not None:
@@ -192,9 +217,10 @@ def generate_cache_payload(
         aoi_info = {"bounds": aoi_bounds, "crs": aoi_crs}
 
     return {
-        "source_path": str(Path(path).resolve()),
+        "source_path": _source_identity(path),
         "var": var,
         "squeeze": squeeze,
+        "engine": engine,
         "target_crs": target_crs,
         "target_res": target_res,
         "target_x_dim": _TARGET_X_DIM,
@@ -254,7 +280,7 @@ def load_base_grid(
     data = None
     from_cache = False
 
-    path = Path(path)
+    path = str(path) if _is_remote_uri(path) else Path(path)
     cache_payload = generate_cache_payload(
         path=path,
         target_crs=target_crs,

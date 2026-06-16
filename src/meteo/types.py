@@ -9,6 +9,7 @@ import pandas as pd
 import geopandas as gpd
 import rioxarray  # noqa: F401
 from shapely.geometry import Point
+from pyproj import CRS
 
 from ..array.base_grid import BaseGrid
 from ..interpolate import InterpolationJob
@@ -161,8 +162,8 @@ class MeteoData:
         if target_crs is None:
             raise ValueError("Target grid must have an explicit CRS before interpolation jobs can be built.")
 
-        target_epsg = target_crs.to_epsg()
-        if target_epsg == self.crs:
+        target_crs = CRS.from_user_input(target_crs)
+        if target_crs == CRS.from_user_input(self.crs):
             return {station_id: coords for station_id, coords in zip(self.ids, self.coords)}
 
         stations = gpd.GeoDataFrame(

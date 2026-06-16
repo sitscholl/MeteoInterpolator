@@ -56,3 +56,19 @@ def test_base_grid_cache_without_crs_raises_clear_error(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="does not define a CRS"):
         load_base_grid(source_path, var="orog", original_crs=4326, cache_manager=cache_manager)
+
+
+def test_remote_base_grid_url_is_not_converted_to_windows_path(monkeypatch):
+    source_url = "https://example.test/data/chelsa-w5e5_obsclim_orog_30arcsec_global.nc#mode=bytes"
+    opened_calls = []
+
+    def fake_open_dataset(path, **kwargs):
+        opened_calls.append((path, kwargs))
+        return _source_grid(crs=4326).to_dataset()
+
+    monkeypatch.setattr(xr, "open_dataset", fake_open_dataset)
+
+    base_grid = load_base_grid(source_url, var="orog", original_crs=4326, engine="netcdf4")
+
+    assert opened_calls == [(source_url, {"engine": "netcdf4"})]
+    assert base_grid.path == source_url
