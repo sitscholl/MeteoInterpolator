@@ -42,6 +42,18 @@ interpolation:
     neighbours: 4
     weight_exponent: 2
 
+cross_validation:
+  enabled: false
+  cv: loo
+  scoring: [mae, rmse, bias]
+  scopes: [overall]
+  refit_vertical_per_fold: false
+  select_by: mae
+  select_scope: overall
+  apply_best_params: true
+  param_grid:
+    lambda: [0, 25, 50, 75, 100, 150, 200]
+
 output:
   format: tiff
   options:

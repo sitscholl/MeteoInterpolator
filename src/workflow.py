@@ -8,6 +8,7 @@ import logging
 
 from .runtime import RuntimeContext
 from .meteo.types import MeteoData
+from .interpolate import cross_validate
 
 logger = logging.getLogger(__name__)
 
@@ -151,11 +152,40 @@ class InterpolationWorkflow:
                     self.context.interpolator.min_sample_size,
                 )
                 continue
-            prediction = self.context.interpolator.fit(job).predict(distance_fields=run_distance_fields)
+
+            lam_value = None
+            cv_result = None
+            cross_validation_config = getattr(self.context, "cross_validation_config", None)
+            if cross_validation_config is not None:
+                cv_config = dict(cross_validation_config)
+                apply_best_params = cv_config.pop("apply_best_params", True)
+                cv_result = cross_validate(
+                    self.context.interpolator,
+                    job,
+                    distance_fields=run_distance_fields,
+                    **cv_config,
+                )
+                if apply_best_params:
+                    lam_value = cv_result.best_params.get("lambda")
+                logger.info(
+                    "Cross-validation selected parameters for %s: %s (%s=%s)",
+                    job,
+                    cv_result.best_params,
+                    cv_result.select_by,
+                    cv_result.best_score,
+                )
+
+            prediction = self.context.interpolator.fit(job).predict(
+                distance_fields=run_distance_fields,
+                lam_value=lam_value,
+            )
 
             output_grid = self._prepare_grid_for_output(prediction, job.parameter, job.timestamp)
             if grid_writer is not None:
                 grid_writer.write(output_grid)
+
+            if cv_result is not None and self.context.db is not None and hasattr(self.context.db, "store_cv_results"):
+                self.context.db.store_cv_results(cv_result.fold_results, timestamp=job.timestamp)
 
             results.append(output_grid)
 

@@ -93,7 +93,9 @@ class RuntimeContext:
             logger.info("Gapfiller initialized")
 
         ##Distance Calculator
-        distance_config = config.get('distance')
+        interpolation_config = config['interpolation']
+
+        distance_config = interpolation_config.get('distance')
         if distance_config is None:
             self.distance_calculator = None
         else:
@@ -108,8 +110,16 @@ class RuntimeContext:
         ## Interpolator
         self.interpolator = Interpolator.from_config(
             base_grid = self.base_grid,
-            config = config['interpolation'],
+            config = interpolation_config,
         )
+
+        cv_config = config.get("cross_validation")
+        if cv_config is None or not cv_config.get("enabled", False):
+            self.cross_validation_config = None
+            logger.info("No cross-validation configuration provided. Cross-validation will be skipped")
+        else:
+            self.cross_validation_config = dict(cv_config)
+            self.cross_validation_config.pop("enabled", None)
 
         ## Grid Writer
         output_config = config.get('output')
