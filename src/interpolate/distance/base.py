@@ -50,6 +50,67 @@ class DistanceField:
         dataset.attrs["distance_type"] = self.distance_type
         return dataset
 
+    def to_points(
+        self,
+        target_ids: Sequence[Hashable],
+        x_coords: Sequence[float],
+        y_coords: Sequence[float],
+        method: str | None = "nearest",
+    ) -> xr.DataArray:
+        if self.data is None:
+            raise ValueError("Cannot sample an empty DistanceField.")
+
+        target_ids = [str(target_id) for target_id in target_ids]
+        x_coords = list(x_coords)
+        y_coords = list(y_coords)
+        if len(target_ids) != len(x_coords) or len(target_ids) != len(y_coords):
+            raise ValueError(
+                "target_ids, x_coords, and y_coords must have the same length. "
+                f"Got {len(target_ids)}, {len(x_coords)}, and {len(y_coords)}."
+            )
+        if len(target_ids) == 0:
+            raise ValueError("At least one target point is required.")
+        if len(target_ids) != len(set(target_ids)):
+            raise ValueError("Target point ids must be unique.")
+
+        x_values = self.data.coords["x"].values
+        y_values = self.data.coords["y"].values
+        invalid_ids = [
+            target_id
+            for target_id, x, y in zip(target_ids, x_coords, y_coords)
+            if not (min(x_values) <= x <= max(x_values) and min(y_values) <= y <= max(y_values))
+        ]
+        if invalid_ids:
+            raise ValueError(
+                "Target points are outside the distance field extent. "
+                f"Check CRS and field extent for ids: {invalid_ids}"
+            )
+
+        target_coord = xr.DataArray(
+            target_ids,
+            dims=("target_id",),
+            coords={"target_id": target_ids},
+        )
+        x_indexer = xr.DataArray(
+            np.asarray(x_coords, dtype=float),
+            dims=("target_id",),
+            coords={"target_id": target_coord},
+        )
+        y_indexer = xr.DataArray(
+            np.asarray(y_coords, dtype=float),
+            dims=("target_id",),
+            coords={"target_id": target_coord},
+        )
+
+        point_distances = self.data.sel(x=x_indexer, y=y_indexer, method=method)
+        return point_distances.assign_coords(
+            {
+                "target_id": target_ids,
+                "target_x": ("target_id", np.asarray(x_coords, dtype=float)),
+                "target_y": ("target_id", np.asarray(y_coords, dtype=float)),
+            }
+        )
+
     def __post_init__(self):
         ##make sure the structure of the dataArray corresponds to a fixed schema
         if self.data is None:

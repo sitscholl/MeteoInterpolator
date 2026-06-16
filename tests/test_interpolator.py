@@ -85,7 +85,7 @@ def test_interpolator_requires_base_grid_with_matching_crs():
         vertical_model=LinearVerticalModel(),
     )
     with pytest.raises(ValueError, match="does not match"):
-        interpolator.interpolate(job)
+        interpolator.fit(job)
 
 
 def test_interpolator_returns_result_and_adds_idw_residuals():
@@ -128,14 +128,62 @@ def test_interpolator_returns_result_and_adds_idw_residuals():
         min_sample_size=3,
     )
 
-    result = interpolator.interpolate(job, distance_fields=DistanceField("test_distance", distances))
+    result = interpolator.fit(job).predict(distance_fields=DistanceField("test_distance", distances))
 
-    assert result.timestamp == pd.Timestamp("2026-05-13")
-    assert result.parameter == "tair_2m"
-    assert result.prediction.dims == ("y", "x")
-    assert result.residual_prediction.dims == ("y", "x")
-    xr.testing.assert_equal(result.prediction.x, target_grid.x)
-    xr.testing.assert_equal(result.prediction.y, target_grid.y)
-    assert float(result.prediction.sel(y=0.0, x=0.0)) == pytest.approx(0.0)
-    assert float(result.prediction.sel(y=0.0, x=1.0)) == pytest.approx(3.0)
-    assert float(result.prediction.sel(y=0.0, x=2.0)) == pytest.approx(2.0)
+    assert interpolator.timestamp_ == pd.Timestamp("2026-05-13")
+    assert interpolator.parameter_ == "tair_2m"
+    assert result.dims == ("y", "x")
+    xr.testing.assert_equal(result.x, target_grid.x)
+    xr.testing.assert_equal(result.y, target_grid.y)
+    assert float(result.sel(y=0.0, x=0.0)) == pytest.approx(0.0)
+    assert float(result.sel(y=0.0, x=1.0)) == pytest.approx(3.0)
+    assert float(result.sel(y=0.0, x=2.0)) == pytest.approx(2.0)
+
+
+def test_interpolator_predicts_points_with_idw_residuals():
+    target_grid = xr.DataArray(
+        [[0.0, 1.0, 2.0]],
+        dims=("y", "x"),
+        coords={"y": [0.0], "x": [0.0, 1.0, 2.0]},
+        name="elevation",
+    ).rio.write_crs(4326)
+    observations = pd.DataFrame(
+        {
+            "station_id": ["a", "b", "c"],
+            "elevation": [0.0, 1.0, 2.0],
+            "x": [0.0, 1.0, 2.0],
+            "y": [0.0, 0.0, 0.0],
+            "tair_2m": [0.0, 3.0, 2.0],
+        }
+    )
+    distances = DistanceField(
+        "test_distance",
+        xr.DataArray(
+            np.array(
+                [
+                    [[0.0, 1.0, 2.0]],
+                    [[1.0, 0.0, 1.0]],
+                    [[2.0, 1.0, 0.0]],
+                ]
+            ),
+            dims=("id", "y", "x"),
+            coords={"id": ["a", "b", "c"], "y": [0.0], "x": [0.0, 1.0, 2.0]},
+        ),
+    )
+    job = InterpolationJob(
+        timestamp=pd.Timestamp("2026-05-13"),
+        parameter="tair_2m",
+        observations=observations,
+        crs=4326,
+    )
+    interpolator = Interpolator(
+        base_grid=_base_grid(target_grid),
+        vertical_model=LinearVerticalModel(),
+        residual_model=InverseDistanceWeighting(neighbours=1),
+    )
+
+    result = interpolator.fit(job).predict(observations, distance_fields=distances)
+
+    assert isinstance(result, pd.Series)
+    assert result.index.tolist() == ["a", "b", "c"]
+    assert result.tolist() == pytest.approx([0.0, 3.0, 2.0])

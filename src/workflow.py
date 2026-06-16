@@ -143,16 +143,19 @@ class InterpolationWorkflow:
 
             logger.info('Starting interpolation job %s', job)
 
-            interpolation_result = self.context.interpolator.interpolate(job, distance_fields = run_distance_fields)
-            if interpolation_result is None:
+            if len(job.observations) < self.context.interpolator.min_sample_size:
+                logger.warning(
+                    "Skipping interpolation job %s because only %s station sample(s) are available and %s are required.",
+                    job,
+                    len(job.observations),
+                    self.context.interpolator.min_sample_size,
+                )
                 continue
+            prediction = self.context.interpolator.fit(job).predict(distance_fields=run_distance_fields)
 
-            output_grid = self._prepare_grid_for_output(interpolation_result.prediction, job.parameter, job.timestamp)
+            output_grid = self._prepare_grid_for_output(prediction, job.parameter, job.timestamp)
             if grid_writer is not None:
                 grid_writer.write(output_grid)
-
-            if self.context.db is not None:
-                self.context.db.store_cv_results(interpolation_result.cv_results, timestamp = job.timestamp)
 
             results.append(output_grid)
 

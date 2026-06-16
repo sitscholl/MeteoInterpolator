@@ -6,7 +6,7 @@ from pathlib import Path
 
 from src.array.base_grid import BaseGrid
 from src.array.cache import CacheManager
-from src.interpolate.distance import PathDistanceCalculator
+from src.interpolate.distance import DistanceField, PathDistanceCalculator
 
 
 def _base_grid(data: xr.DataArray) -> BaseGrid:
@@ -224,3 +224,30 @@ def test_source_points_outside_dem_raise_clear_error():
 
     with pytest.raises(ValueError, match="outside the supplied DEM extent"):
         calculator.calculate_fields(_base_grid(dem), [10.0], [0.0], ["station"])
+
+
+def test_distance_field_to_points_samples_grid_distances():
+    distances = DistanceField(
+        "test_distance",
+        xr.DataArray(
+            np.array(
+                [
+                    [[0.0, 1.0, 2.0]],
+                    [[1.0, 0.0, 1.0]],
+                ]
+            ),
+            dims=("id", "y", "x"),
+            coords={"id": ["a", "b"], "y": [0.0], "x": [0.0, 1.0, 2.0]},
+        ),
+    )
+
+    sampled = distances.to_points(
+        target_ids=["target-a", "target-c"],
+        x_coords=[0.0, 2.0],
+        y_coords=[0.0, 0.0],
+    )
+
+    assert sampled.dims == ("id", "target_id")
+    assert sampled.target_id.values.tolist() == ["target-a", "target-c"]
+    assert sampled.sel(id="a", target_id="target-a").item() == pytest.approx(0.0)
+    assert sampled.sel(id="b", target_id="target-c").item() == pytest.approx(1.0)
