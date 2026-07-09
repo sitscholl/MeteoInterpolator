@@ -11,7 +11,25 @@ class AOI:
     miny: float
     maxx: float
     maxy: float
-    crs: int = 4326  # canonical CRS for config bbox
+    crs: CRS
+
+    @classmethod
+    def from_array(cls, array: xr.DataArray | xr.DataSet):
+        minx, miny, maxx, maxy = array.rio.bounds()
+        crs = array.rio.crs
+
+        if crs is None:
+            raise ValueError("Cannot create AOI instance from array without crs.")
+        
+        crs = CRS.from_user_input(crs)
+
+        if crs is None:
+            raise ValueError(f"Unable to get CRS object form array crs. Array crs: {array.rio.crs}")
+
+        return cls(
+            minx, miny, maxx, maxy, crs
+        )
+
 
     def _to_crs(self, dst_crs):
         src_crs = CRS.from_user_input(self.crs)

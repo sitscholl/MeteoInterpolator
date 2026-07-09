@@ -1,5 +1,4 @@
 general:
-  require_stations_in_aoi: true
   timezone: Europe/Rome
 
 meteo_data:
@@ -8,22 +7,15 @@ meteo_data:
               '41000MS', '44500MS', '50500MS', '56900MS', '59700MS', '65600MS', '66500MS', '73500MS',
               '74900MS', '75600MS', '82200MS', '83200MS', '85120MS', '86900MS', '88820MS']
 
-base_grid:
-  path: "https://files.isimip.org/ISIMIP3a/InputData/climate/atmosphere/obsclim/global/daily/historical/CHELSA-W5E5/chelsa-w5e5_obsclim_orog_30arcsec_global.nc#mode=bytes"
-  var: orog
-  original_crs: 4326
-  target_crs: 32532
-  aoi_buffer_m: 5000
+dem:
+  #path: "https://files.isimip.org/ISIMIP3a/InputData/climate/atmosphere/obsclim/global/daily/historical/CHELSA-W5E5/chelsa-w5e5_obsclim_orog_30arcsec_global.nc#mode=bytes"
+  path: data/dem_envelope_100m.tif
+  var: null
+  crs: null
 
 cache:
   enabled: true
   cache_dir: data/cache
-
-aoi:
-  minx: 10
-  miny: 46
-  maxx: 12
-  maxy: 47
 
 interpolation:
   min_sample_size: 3

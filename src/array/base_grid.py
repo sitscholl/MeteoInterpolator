@@ -37,13 +37,10 @@ def _source_suffix(path: str | Path) -> str:
     return Path(text).suffix
 
 @dataclass(frozen = True)
-class BaseGrid:
+class DEM:
     path: str | Path
     data: xr.DataArray
-    aoi: AOI | None
-    resampling_method: str
     fingerprint: str
-    from_cache: bool = False
 
     def __post_init__(self):
         if self.data.rio.crs is None:
@@ -51,6 +48,10 @@ class BaseGrid:
         for req_dim in ['x', 'y']:
             if req_dim not in self.data.dims:
                 raise ValueError(f"Missing dimension {req_dim} in base grid")
+        if not isinstance(self.data, xr.DataArray):
+            raise ValueError(f"Dem must be a DataArray. Got {type(self.data)}")
+        if self.data.isnull().any().compute().item():
+            raise ValueError('Dem cannot contain NaN values.')
 
 def _find_dim_name(data: xr.DataArray | xr.Dataset, lookup_names: list[str]) -> str:
     
@@ -137,245 +138,54 @@ def _select_data_var(data: xr.DataArray | xr.Dataset, path: str | Path, var: str
         selected = selected.assign_coords(spatial_ref=data["spatial_ref"])
     return selected
 
-def _open_uncached_grid(
+def load_base_grid(
     path: str | Path,
     var: str | None = None,
+    crs: str | None = None,
     squeeze: bool = True,
     engine: str | None = None,
-):
+    x_dim: str | None = None,
+    y_dim: str | None = None,
+    **kwargs
+    ) -> DEM:
+    
+    path = str(path) if _is_remote_uri(path) else Path(path)
 
-    try:
-        if _source_suffix(path) == '.zarr':
-            data = xr.open_zarr(path)
-        else:
-            open_kwargs = {}
-            if engine is not None:
-                open_kwargs["engine"] = engine
-            data = xr.open_dataset(path, **open_kwargs)
-    except Exception as e:
-        logger.exception(f"Error opending base grid at {path}: {e}")
-        raise
+    if _source_suffix(path) == '.zarr':
+        data = xr.open_zarr(path)
+    else:
+        open_kwargs = {}
+        if engine is not None:
+            open_kwargs["engine"] = engine
+        data = xr.open_dataset(path, **open_kwargs)
 
     data = _select_data_var(data, path=path, var=var)
-
     data = load_crs_metadata(data) #try to get crs info
 
     if squeeze:
         data = data.squeeze(drop = True)
 
-    return data
-
-def _check_reprojection(data, target_crs, target_res):
-    needs_reprojection = False
-    if CRS.from_user_input(data.rio.crs) != CRS.from_user_input(target_crs):
-        needs_reprojection = True
-
-    original_res_x, original_res_y = data.rio.resolution()
-    original_res = (abs(original_res_x), abs(original_res_y))
-    if target_res is not None:
-        if isinstance(target_res, (int, float)):
-            target_res = (float(target_res), float(target_res))
-        else:
-            if len(target_res) != 2:
-                raise ValueError("target_res must be a scalar or a 2-tuple (x_res, y_res).")
-            target_res = (float(target_res[0]), float(target_res[1]))
-        if not (math.isclose(original_res[0], abs(target_res[0])) and math.isclose(original_res[1], abs(target_res[1]))):
-            needs_reprojection = True
-    
-    return needs_reprojection
-
-def generate_cache_payload(
-    path: Path,
-    target_crs: int | None,
-    target_res: int | float | tuple[float, float] | None,
-    original_crs: int | None,
-    x_dim: str | None,
-    y_dim: str | None,
-    aoi: AOI | None,
-    aoi_buffer_m: int | float | None,
-    resampling_method: str | Resampling,
-    **kwargs
-) -> dict:
-    if isinstance(target_res, (int, float)):
-        target_res = (float(target_res), float(target_res))
-    elif target_res is not None:
-        target_res = (float(target_res[0]), float(target_res[1]))
-
-    if isinstance(resampling_method, Resampling):
-        resampling_method = resampling_method.name.lower()
-    else:
-        resampling_method = str(resampling_method).lower()
-
-    var = kwargs.get("var")
-    squeeze = kwargs.get("squeeze", True)
-    engine = kwargs.get("engine")
-
-    aoi_info = None
-    if aoi is not None:
-        aoi_bounds = tuple(float(v) for v in aoi.bounds)
-        aoi_crs = getattr(aoi, "crs", None)
-        aoi_info = {"bounds": aoi_bounds, "crs": aoi_crs}
-
-    return {
-        "source_path": _source_identity(path),
-        "var": var,
-        "squeeze": squeeze,
-        "engine": engine,
-        "target_crs": target_crs,
-        "target_res": target_res,
-        "target_x_dim": _TARGET_X_DIM,
-        "target_y_dim": _TARGET_Y_DIM,
-        "original_crs": original_crs,
-        "x_dim": x_dim,
-        "y_dim": y_dim,
-        "aoi": aoi_info,
-        "aoi_buffer_m": aoi_buffer_m,
-        "resampling_method": resampling_method,
-    }
-
-def _prepare_loaded_array(data, aoi, aoi_buffer_m, target_crs, target_res, needs_reprojection, resampling_method):
-    # Filter before reprojecting
-    if aoi is not None:
-        if needs_reprojection:
-            data = aoi.filter_bbox(data, buffer_m=aoi_buffer_m)
-        else:
-            data = aoi.filter_bbox(data)
-
-    if needs_reprojection:
-        if CRS.from_user_input(data.rio.crs) != CRS.from_user_input(target_crs):
-            logger.debug(f"Reprojecting base grid from crs {data.rio.crs} to {target_crs}")
-        
-        original_res_x, original_res_y = data.rio.resolution()
-        original_res = (abs(original_res_x), abs(original_res_y))
-        if target_res is not None and original_res != target_res:
-            logger.debug(f"Reprojecting base grid from resolution of {original_res} to {target_res}")
-        
-        if isinstance(resampling_method, str):
-            try:
-                resampling_method = Resampling[resampling_method.lower()]
-            except KeyError as exc:
-                valid_methods = ", ".join(r.name.lower() for r in Resampling)
-                raise ValueError(f"Unknown resampling_method '{resampling_method}'. Valid options: {valid_methods}") from exc
-        
-        data = data.rio.reproject(dst_crs = target_crs, resolution = target_res, resampling = resampling_method)
-        if aoi is not None:
-            data = aoi.filter_bbox(data)
-
-    return data
-
-def load_base_grid(
-    path: str | Path,
-    target_crs: int | None = None, 
-    target_res: int | float | tuple[float, float] | None = None, 
-    original_crs: int | None = None,
-    aoi: AOI | None = None, 
-    aoi_buffer_m: int | float | None = None,
-    x_dim: str | None = None,
-    y_dim: str | None = None,
-    resampling_method: str | Resampling = 'bilinear',
-    cache_manager: CacheManager | None = None,
-    **kwargs
-    ) -> BaseGrid:
-    
-    data = None
-    from_cache = False
-
-    path = str(path) if _is_remote_uri(path) else Path(path)
-    cache_payload = generate_cache_payload(
-        path=path,
-        target_crs=target_crs,
-        target_res=target_res,
-        original_crs=original_crs,
+    data = _prepare_spatial_dims(
+        data,
         x_dim=x_dim,
         y_dim=y_dim,
-        aoi=aoi,
-        aoi_buffer_m=aoi_buffer_m,
-        resampling_method=resampling_method,
-        **kwargs,
+        x_dim_target=_TARGET_X_DIM,
+        y_dim_target=_TARGET_Y_DIM,
     )
-    if cache_manager is not None:
-        data = cache_manager.load_cache(_CACHE_KEY, cache_payload)
+    data_crs = data.rio.crs
 
-    if data is not None:
-        cache_path = cache_manager._build_cache_path(_CACHE_KEY, cache_payload)
-        logger.info(f"Using cached base grid from {cache_path}")
-        data = _select_data_var(data, path=cache_path, var=kwargs.get("var"))
-        data = load_crs_metadata(data)
-        
-        if data.rio.crs is None:
-            raise ValueError(
-                f"Base grid loaded from {cache_path} does not define a CRS. "
-                "Rebuild the cache with CRS metadata."
-            )
-        if target_crs is not None and CRS.from_user_input(data.rio.crs) != CRS.from_user_input(target_crs):
-            raise ValueError(
-                f"Cached base grid CRS {data.rio.crs} does not match requested target_crs EPSG:{target_crs}. "
-                f"Delete cache at {cache_path} and rebuild it."
-            )
-
-        data = _prepare_spatial_dims(
-            data,
-            x_dim=_TARGET_X_DIM,
-            y_dim=_TARGET_Y_DIM,
-            x_dim_target=_TARGET_X_DIM,
-            y_dim_target=_TARGET_Y_DIM,
+    if crs is None and data_crs is None:
+        raise ValueError(
+            "Dataset crs could not be loaded when opening file. Please provide original_crs manually in config."
         )
-        needs_reprojection = False
-        from_cache = True
-
-    else:
-        data = _open_uncached_grid(path, **kwargs)
-        data = _prepare_spatial_dims(
-            data,
-            x_dim=x_dim,
-            y_dim=y_dim,
-            x_dim_target=_TARGET_X_DIM,
-            y_dim_target=_TARGET_Y_DIM,
-        )
+    if data_crs is None:
+        data = data.rio.write_crs(crs, inplace = False)
         data_crs = data.rio.crs
-
-        if original_crs is None and data_crs is None:
-            raise ValueError(
-                "Dataset crs could not be loaded when opening file. Please provide original_crs manually in config."
-            )
-
-        if data_crs is None:
-            data = data.rio.write_crs(original_crs, inplace = False)
-            data_crs = data.rio.crs
-
-        if original_crs is not None and CRS.from_user_input(data_crs) != CRS.from_user_input(original_crs):
-                logger.warning(
-                    f"Provided original_crs does not correspond to dataset crs and will be ignored. {original_crs} vs {data_crs}"
-                )
-        if target_crs is None:
-            target_crs = data_crs
-
-        needs_reprojection = _check_reprojection(data, target_crs, target_res)
-    
-        data = _prepare_loaded_array(
-            data, 
-            aoi = aoi, 
-            aoi_buffer_m = aoi_buffer_m, 
-            target_crs = target_crs, 
-            target_res = target_res, 
-            needs_reprojection = needs_reprojection,
-            resampling_method=resampling_method
-            )
-
-    if data.isnull().any().compute().item():
-        raise ValueError('BaseGrid cannot contain NaN values. Check reprojection and aoi settings. Set higher value for aoi_buffer_m?')
-
-    if cache_manager is not None and not from_cache:
-        cache_manager.initialize_cache(data, key = _CACHE_KEY, cache_params=cache_payload)
-        logger.info(f"Base grid cache written to {cache_manager._build_cache_path(key = _CACHE_KEY, cache_params=cache_payload)}")
 
     fingerprint = CacheManager.array_fingerprint(data)
 
-    return BaseGrid(
+    return DEM(
         path = path,
         data = data,
-        aoi = aoi,
-        resampling_method = resampling_method.name.lower() if isinstance(resampling_method, Resampling) else str(resampling_method).lower(),
         fingerprint = fingerprint,
-        from_cache = from_cache
     )

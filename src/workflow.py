@@ -106,15 +106,17 @@ class InterpolationWorkflow:
         meteo_data = MeteoData.from_list(station_data)
         if meteo_data.n_stations == 0:
             raise ValueError("Could not load data for any station.")
-
-        if meteo_data.n_stations < 3:
-            raise ValueError(f"Model fitting requires at least 3 stations. Got {meteo_data.n_stations}")
         logger.info(f"Loaded data for {meteo_data.n_stations} stations.")
 
-        ## Check if any stations are within AOI, otherwise raise
-        stations_within_aoi = self.context.aoi.filter_bbox(meteo_data.to_geodataframe())
-        if self.context.require_stations_in_aoi and len(stations_within_aoi) == 0:
-            raise ValueError("No stations are within defined bounds.")
+        ## Filter stations that are inside DEM
+        meteo_data, n_dropped = meteo_data.filter_bbox(aoi = self.context.aoi)
+        if meteo_data.n_stations == 0:
+            raise ValueError("No stations are within supplied dem.")
+        if n_dropped > 0:
+            logger.warning(f"Dropped {n_dropped} stations outside dem")
+
+        if meteo_data.n_stations < self.context.interpolator.min_sample_size:
+            raise ValueError(f"Only {meteo_data.n_stations} available, interpolation requires {self.context.interpolator.min_sample_size}")
 
         if self.context.gapfiller is not None:
             meteo_data = self.context.gapfiller.fill_gaps(meteo_data)

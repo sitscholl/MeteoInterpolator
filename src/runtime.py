@@ -1,11 +1,12 @@
 from pathlib import Path
 from dataclasses import dataclass
 import yaml
+from pyproj import CRS
 
 import logging
 
 from .aoi import AOI
-from .array.base_grid import load_base_grid
+from .array.base_grid import load_dem
 from .array.cache import CacheManager
 from .meteo.base import BaseMeteoHandler
 from .resample import MeteoResampler
@@ -48,20 +49,25 @@ class RuntimeContext:
         ## General
         general_config = config['general']            
         self.timezone = general_config['timezone']
-        self.require_stations_in_aoi = general_config.get('require_stations_in_aoi', True)
        
-        self.aoi = AOI(**config['aoi'])
-        logger.info(f'Initialized aoi with bounds {self.aoi.bounds}')
-
         ## Cache
         cache_config = config.get("cache", {})
         cache_enabled = cache_config.get("enabled", True)
         self.cache_manager = CacheManager(cache_config.get("cache_dir", "data/cache")) if cache_enabled else None
 
-        ## Base Grid
-        base_grid_config = dict(config['base_grid'])
-        self.base_grid = load_base_grid(**base_grid_config, aoi = self.aoi, cache_manager=self.cache_manager)
-        logger.info(f"Initialized Base grid {self.base_grid}")
+        ## DEM
+        dem_config = dict(config['dem'])
+        self.dem = load_dem(**dem_config)
+        logger.info(f"Initialized dem {self.dem}")
+
+        ## CRS
+        self.target_crs = CRS.from_user_input(self.dem.crs)
+        if self.target_crs.to_epsg() != 4326:
+            raise NotImplementedError(f"dem has a crs of {self.target_crs}. Only 4326 implemented for now. Please reproject the supplied dem.")
+
+        ## AOI
+        self.aoi = AOI.from_array(self.dem.data)
+        logger.info(f'Initialized aoi with bounds {self.aoi.bounds}')
 
         ## Meteo Data
         meteo_data_config = dict(config['meteo_data'])
