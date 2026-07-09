@@ -11,7 +11,7 @@ import rioxarray  # noqa: F401
 from shapely.geometry import Point
 from pyproj import CRS
 
-from ..array.base_grid import BaseGrid
+from ..array.dem import DEM
 from ..interpolate import InterpolationJob
 from ..interpolate.interpolator import _REQUIRED_COLUMNS
 
@@ -184,8 +184,8 @@ class MeteoData:
         station_idx = self.ids.index(station_id)
         return self.data[station_idx]
 
-    def build_jobs(self, start: pd.Timestamp, end: pd.Timestamp, param: str, base_grid: BaseGrid):
-        target_grid = base_grid.data
+    def build_jobs(self, start: pd.Timestamp, end: pd.Timestamp, param: str, dem: DEM):
+        target_grid = dem.data
 
         df = self.to_dataframe(include_coords = True)
         if df.empty:

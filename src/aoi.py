@@ -11,10 +11,10 @@ class AOI:
     miny: float
     maxx: float
     maxy: float
-    crs: CRS
+    crs: CRS | int | str = 4326
 
     @classmethod
-    def from_array(cls, array: xr.DataArray | xr.DataSet):
+    def from_array(cls, array: xr.DataArray | xr.Dataset):
         minx, miny, maxx, maxy = array.rio.bounds()
         crs = array.rio.crs
 

@@ -3,18 +3,16 @@ import xarray as xr
 import rioxarray  # noqa: F401
 from pathlib import Path
 
-from src.array.base_grid import BaseGrid
 from src.array.cache import CacheManager
+from src.array.dem import DEM
 from src.meteo.types import MeteoData
 from src.validate.date import localize_datetime_string
 
 
-def _base_grid(data: xr.DataArray) -> BaseGrid:
-    return BaseGrid(
+def _dem(data: xr.DataArray) -> DEM:
+    return DEM(
         path=Path("memory"),
         data=data,
-        aoi=None,
-        resampling_method="nearest",
         fingerprint=CacheManager.array_fingerprint(data),
     )
 
@@ -64,7 +62,7 @@ def test_build_jobs_is_single_parameter_and_end_exclusive():
             start=pd.Timestamp("2026-05-13"),
             end=pd.Timestamp("2026-05-14"),
             param="tair_2m",
-            base_grid=_base_grid(target_grid),
+            dem=_dem(target_grid),
         )
     )
 

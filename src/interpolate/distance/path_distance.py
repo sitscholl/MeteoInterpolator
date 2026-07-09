@@ -8,7 +8,7 @@ from scipy.sparse.csgraph import dijkstra
 
 import logging
 
-from ...array.base_grid import BaseGrid
+from ...array.dem import DEM
 from ...array.cache import CacheManager
 from .base import BaseDistanceCalculator, DistanceField
 
@@ -334,7 +334,7 @@ class PathDistanceCalculator(BaseDistanceCalculator):
 
     def calculate_distance(
         self,
-        dem: BaseGrid,
+        dem: DEM,
         x_coords: Sequence[float],
         y_coords: Sequence[float],
         point_ids: Sequence[Hashable] | None = None,

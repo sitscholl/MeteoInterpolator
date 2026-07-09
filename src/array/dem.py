@@ -1,15 +1,11 @@
 from pathlib import Path
 from urllib.parse import urlparse
 import xarray as xr
-import rioxarray
-from rasterio.enums import Resampling
-from pyproj import CRS
-import math
+import rioxarray  # noqa: F401
 from dataclasses import dataclass
 
 import logging
 
-from ..aoi import AOI
 from .cache import CacheManager
 from .crs import load_crs_metadata
 
@@ -19,8 +15,6 @@ _POSSIBLE_X_DIM_NAMES = ["lon", "longitude", "x"]
 _POSSIBLE_Y_DIM_NAMES = ["lat", "latitude", "y"]
 _TARGET_X_DIM = 'x'
 _TARGET_Y_DIM = 'y'
-_CACHE_KEY = 'base_grid'
-
 def _is_remote_uri(path: str | Path) -> bool:
     parsed = urlparse(str(path))
     return parsed.scheme in {"http", "https", "s3", "gs", "az"}
@@ -43,15 +37,23 @@ class DEM:
     fingerprint: str
 
     def __post_init__(self):
+        if not isinstance(self.data, xr.DataArray):
+            raise TypeError(f"DEM must be a DataArray. Got {type(self.data)}")
         if self.data.rio.crs is None:
-            raise ValueError("Base grid must define a CRS")
+            raise ValueError("DEM must define a CRS")
         for req_dim in ['x', 'y']:
             if req_dim not in self.data.dims:
-                raise ValueError(f"Missing dimension {req_dim} in base grid")
-        if not isinstance(self.data, xr.DataArray):
-            raise ValueError(f"Dem must be a DataArray. Got {type(self.data)}")
+                raise ValueError(f"Missing dimension {req_dim} in DEM")
         if self.data.isnull().any().compute().item():
-            raise ValueError('Dem cannot contain NaN values.')
+            raise ValueError('DEM cannot contain NaN values.')
+
+    @property
+    def crs(self):
+        return self.data.rio.crs
+
+    @property
+    def bounds(self):
+        return self.data.rio.bounds()
 
 def _find_dim_name(data: xr.DataArray | xr.Dataset, lookup_names: list[str]) -> str:
     
@@ -129,16 +131,16 @@ def _select_data_var(data: xr.DataArray | xr.Dataset, path: str | Path, var: str
         selected = data[var]
     else:
         if not available_vars:
-            raise ValueError(f"No data variables found in base grid at {path}.")
+            raise ValueError(f"No data variables found in DEM at {path}.")
         if len(available_vars) > 1:
-            logger.warning(f"Found multiple variables in base grid: {available_vars}. Picking first one.")
+            logger.warning(f"Found multiple variables in DEM: {available_vars}. Picking first one.")
         selected = data[next(iter(available_vars))]
 
     if "spatial_ref" in data:
         selected = selected.assign_coords(spatial_ref=data["spatial_ref"])
     return selected
 
-def load_base_grid(
+def load_dem(
     path: str | Path,
     var: str | None = None,
     crs: str | None = None,
@@ -176,7 +178,7 @@ def load_base_grid(
 
     if crs is None and data_crs is None:
         raise ValueError(
-            "Dataset crs could not be loaded when opening file. Please provide original_crs manually in config."
+            "Dataset CRS could not be loaded when opening file. Please provide crs manually in config."
         )
     if data_crs is None:
         data = data.rio.write_crs(crs, inplace = False)

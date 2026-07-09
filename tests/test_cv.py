@@ -6,8 +6,8 @@ import pytest
 import rioxarray  # noqa: F401
 import xarray as xr
 
-from src.array.base_grid import BaseGrid
 from src.array.cache import CacheManager
+from src.array.dem import DEM
 from src.interpolate import cross_validate
 from src.interpolate.distance import DistanceField
 from src.interpolate.idw import InverseDistanceWeighting
@@ -15,12 +15,10 @@ from src.interpolate.interpolator import InterpolationJob, Interpolator
 from src.interpolate.vertical import LinearVerticalModel
 
 
-def _base_grid(data: xr.DataArray) -> BaseGrid:
-    return BaseGrid(
+def _dem(data: xr.DataArray) -> DEM:
+    return DEM(
         path=Path("memory"),
         data=data,
-        aoi=None,
-        resampling_method="nearest",
         fingerprint=CacheManager.array_fingerprint(data),
     )
 
@@ -81,7 +79,7 @@ def test_cross_validate_selects_best_lambda_from_leave_one_out():
         ),
     )
     interpolator = Interpolator(
-        base_grid=_base_grid(grid),
+        dem=_dem(grid),
         vertical_model=LinearVerticalModel(),
         residual_model=InverseDistanceWeighting(neighbours=1),
         min_sample_size=3,
@@ -119,7 +117,7 @@ def test_cross_validate_vertical_scope_without_distance_fields():
         }
     )
     interpolator = Interpolator(
-        base_grid=_base_grid(grid),
+        dem=_dem(grid),
         vertical_model=LinearVerticalModel(),
         min_sample_size=2,
     )

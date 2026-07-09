@@ -1,12 +1,11 @@
 from pathlib import Path
 from dataclasses import dataclass
 import yaml
-from pyproj import CRS
 
 import logging
 
 from .aoi import AOI
-from .array.base_grid import load_dem
+from .array.dem import load_dem
 from .array.cache import CacheManager
 from .meteo.base import BaseMeteoHandler
 from .resample import MeteoResampler
@@ -60,11 +59,6 @@ class RuntimeContext:
         self.dem = load_dem(**dem_config)
         logger.info(f"Initialized dem {self.dem}")
 
-        ## CRS
-        self.target_crs = CRS.from_user_input(self.dem.crs)
-        if self.target_crs.to_epsg() != 4326:
-            raise NotImplementedError(f"dem has a crs of {self.target_crs}. Only 4326 implemented for now. Please reproject the supplied dem.")
-
         ## AOI
         self.aoi = AOI.from_array(self.dem.data)
         logger.info(f'Initialized aoi with bounds {self.aoi.bounds}')
@@ -115,7 +109,7 @@ class RuntimeContext:
 
         ## Interpolator
         self.interpolator = Interpolator.from_config(
-            base_grid = self.base_grid,
+            dem = self.dem,
             config = interpolation_config,
         )
 

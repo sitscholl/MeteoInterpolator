@@ -6,7 +6,7 @@ import logging
 import numpy as np
 import xarray as xr
 
-from ...array.base_grid import BaseGrid
+from ...array.dem import DEM
 from ...array.cache import CacheManager
 
 logger = logging.getLogger(__name__)
@@ -157,7 +157,7 @@ class BaseDistanceCalculator(ABC):
 
     def _distance_cache_parameters(
         self,
-        dem: BaseGrid,
+        dem: DEM,
         x_coords: Sequence[float],
         y_coords: Sequence[float],
         point_ids: Sequence[Hashable],
@@ -242,10 +242,10 @@ class BaseDistanceCalculator(ABC):
         return dem
 
     @classmethod
-    def _validate_dem(cls, dem: BaseGrid) -> xr.DataArray:
-        if not isinstance(dem, BaseGrid):
+    def _validate_dem(cls, dem: DEM) -> xr.DataArray:
+        if not isinstance(dem, DEM):
             raise TypeError(
-                f"dem should be a BaseGrid. Got {type(dem)}"
+                f"dem should be a DEM. Got {type(dem)}"
             )
         return cls._validate_dem_data(dem.data)
 
@@ -278,7 +278,7 @@ class BaseDistanceCalculator(ABC):
     @abstractmethod
     def calculate_distance(
         self,
-        dem: BaseGrid,
+        dem: DEM,
         x_coords: Sequence[float],
         y_coords: Sequence[float],
         point_ids: Sequence[Hashable] | None = None,
@@ -287,7 +287,7 @@ class BaseDistanceCalculator(ABC):
 
     def calculate_fields(
         self,
-        dem: BaseGrid,
+        dem: DEM,
         x_coords: Sequence[float],
         y_coords: Sequence[float],
         point_ids: Sequence[Hashable],

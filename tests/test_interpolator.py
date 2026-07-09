@@ -7,20 +7,18 @@ import pytest
 import xarray as xr
 import rioxarray  # noqa: F401
 
-from src.array.base_grid import BaseGrid
 from src.array.cache import CacheManager
+from src.array.dem import DEM
 from src.interpolate.distance import DistanceField
 from src.interpolate.idw import InverseDistanceWeighting
 from src.interpolate.interpolator import InterpolationJob, Interpolator
 from src.interpolate.vertical import LinearVerticalFit, LinearVerticalModel
 
 
-def _base_grid(data: xr.DataArray) -> BaseGrid:
-    return BaseGrid(
+def _dem(data: xr.DataArray) -> DEM:
+    return DEM(
         path=Path("memory"),
         data=data,
-        aoi=None,
-        resampling_method="nearest",
         fingerprint=CacheManager.array_fingerprint(data),
     )
 
@@ -52,7 +50,7 @@ def test_residual_array_uses_id_dimension_with_station_coordinates():
     assert residuals.y.values.tolist() == [30.0, 40.0]
 
 
-def test_interpolator_requires_base_grid_with_matching_crs():
+def test_interpolator_requires_dem_with_matching_crs():
     target_grid = xr.DataArray(
         [[0.0]],
         dims=("y", "x"),
@@ -68,9 +66,9 @@ def test_interpolator_requires_base_grid_with_matching_crs():
         }
     )
 
-    with pytest.raises(TypeError, match="base_grid must be a BaseGrid"):
+    with pytest.raises(TypeError, match="dem must be a DEM"):
         Interpolator(
-            base_grid=target_grid,
+            dem=target_grid,
             vertical_model=LinearVerticalModel(),
         )
 
@@ -81,7 +79,7 @@ def test_interpolator_requires_base_grid_with_matching_crs():
         crs=4326,
     )
     interpolator = Interpolator(
-        base_grid=_base_grid(target_grid.rio.write_crs(3857)),
+        dem=_dem(target_grid.rio.write_crs(3857)),
         vertical_model=LinearVerticalModel(),
     )
     with pytest.raises(ValueError, match="does not match"):
@@ -122,7 +120,7 @@ def test_interpolator_returns_result_and_adds_idw_residuals():
         crs=4326,
     )
     interpolator = Interpolator(
-        base_grid=_base_grid(target_grid),
+        dem=_dem(target_grid),
         vertical_model=LinearVerticalModel(),
         residual_model=InverseDistanceWeighting(neighbours=1),
         min_sample_size=3,
@@ -177,7 +175,7 @@ def test_interpolator_predicts_points_with_idw_residuals():
         crs=4326,
     )
     interpolator = Interpolator(
-        base_grid=_base_grid(target_grid),
+        dem=_dem(target_grid),
         vertical_model=LinearVerticalModel(),
         residual_model=InverseDistanceWeighting(neighbours=1),
     )

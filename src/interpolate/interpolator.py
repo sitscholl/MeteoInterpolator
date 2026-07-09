@@ -7,7 +7,7 @@ from pyproj import CRS
 from dataclasses import dataclass
 import logging
 
-from ..array.base_grid import BaseGrid
+from ..array.dem import DEM
 from .vertical import BaseFittedVerticalModel, BaseVerticalModel
 from .distance import DistanceField
 from .idw import InverseDistanceWeighting
@@ -55,7 +55,7 @@ class InterpolationJob:
 
 @dataclass
 class Interpolator:
-    base_grid: BaseGrid
+    dem: DEM
     vertical_model: BaseVerticalModel
     residual_model: InverseDistanceWeighting | None = None
     regions: InterpolationRegions | None = None
@@ -63,11 +63,11 @@ class Interpolator:
 
     @property
     def target_grid(self) -> xr.DataArray:
-        return self.base_grid.data
+        return self.dem.data
 
     def __post_init__(self):
-        if not isinstance(self.base_grid, BaseGrid):
-            raise TypeError(f"Interpolator base_grid must be a BaseGrid. Got {type(self.base_grid)}")
+        if not isinstance(self.dem, DEM):
+            raise TypeError(f"Interpolator dem must be a DEM. Got {type(self.dem)}")
         if not isinstance(self.target_grid, xr.DataArray):
             raise TypeError(f"Interpolator target_grid must be an xarray DataArray. Got {type(self.target_grid)}")
         if "x" not in self.target_grid.dims or "y" not in self.target_grid.dims:
@@ -83,7 +83,7 @@ class Interpolator:
     @classmethod
     def from_config(
         cls,
-        base_grid: BaseGrid,
+        dem: DEM,
         config: dict,
     ):
         vertical_config = dict(config["vertical_model"])
@@ -106,7 +106,7 @@ class Interpolator:
         min_sample_size = config.get('min_sample_size', 3)
 
         return cls(
-            base_grid = base_grid,
+            dem = dem,
             vertical_model = vertical_model, 
             residual_model = residual_model, 
             regions = interpolation_regions, 

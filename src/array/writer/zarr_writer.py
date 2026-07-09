@@ -1,5 +1,5 @@
 ###
-#ZarrWriter is not finalized yet. Still need to decide on best api and how to initialize based on current data/base grid or preexisting zarr store
+#ZarrWriter is not finalized yet. Still need to decide on best api and how to initialize based on current data/DEM or preexisting zarr store
 ###
 
 import logging

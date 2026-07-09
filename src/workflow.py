@@ -62,13 +62,13 @@ class InterpolationWorkflow:
                 }
             )
             if job_station_ids:
-                projected_stations = meteo_data.get_projected_station_coords(self.context.base_grid.data)
+                projected_stations = meteo_data.get_projected_station_coords(self.context.dem.data)
                 run_stations = {
                     station_id: projected_stations[station_id]
                     for station_id in job_station_ids
                 }
                 return distance_calculator.calculate_fields(
-                    self.context.base_grid, 
+                    self.context.dem, 
                     [p[0] for p in run_stations.values()], 
                     [p[1] for p in run_stations.values()], 
                     list(run_stations.keys())
@@ -129,13 +129,16 @@ class InterpolationWorkflow:
             groupby_cols = ['station_id']
         )
 
+        ## Get station elevation from dem
+        # meteo_data.update_elevation(self.context.dem)
+
         grid_writer = (
             self.context.grid_writer.initialize(param=param, start=start, end=end, freq=_FREQ)
             if self.context.grid_writer is not None
             else None
         )
 
-        jobs = list(meteo_data.build_jobs(start, end, param, base_grid = self.context.base_grid))
+        jobs = list(meteo_data.build_jobs(start, end, param, dem = self.context.dem))
 
         run_distance_fields = self.prepare_distance_fields(jobs, meteo_data)
 
