@@ -32,6 +32,7 @@ _STATION_DATA_SCHEMA = station_data_schema()
 _OBSERVATION_POINTS_SCHEMA = pg.GeoDataFrameSchema(
         {
             "geometry": pg.Column("geometry", nullable=False, required=True),
+            "elevation": pa.Column(float, nullable=True, required=False, coerce=True)
         },
         index = pa.Index(str, unique=True),
         strict = 'filter'
