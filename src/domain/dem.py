@@ -55,6 +55,9 @@ class DEM:
     def bounds(self):
         return self.data.rio.bounds()
 
+    def __repr__(self):
+        return f"DEM (shape = {self.data.shape}, dims = {self.data.dims}, crs = {self.crs})"
+
 def _find_dim_name(data: xr.DataArray | xr.Dataset, lookup_names: list[str]) -> str:
     
     nams_found = []
@@ -185,6 +188,8 @@ def load_dem(
         data_crs = data.rio.crs
 
     fingerprint = CacheManager.array_fingerprint(data)
+
+    data = data.dropna(dim = 'y', how = 'all').dropna(dim = 'x', how = 'all')
 
     return DEM(
         path = path,
