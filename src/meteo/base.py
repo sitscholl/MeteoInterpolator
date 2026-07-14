@@ -7,7 +7,7 @@ from typing import Any, Dict
 
 from ..domain.schemas import _STATION_DATA_SCHEMA
 
-@dataclass(frozen=True)
+@dataclass
 class Station:
     id: str
     x: float
@@ -36,7 +36,7 @@ class Station:
             raise ValueError("Longitude must be between -180 and 180")
 
         if self.data is not None:
-            _STATION_DATA_SCHEMA.validate(self.data)
+            self.data = _STATION_DATA_SCHEMA.validate(self.data)
 
 class BaseMeteoHandler(ABC):
     """
