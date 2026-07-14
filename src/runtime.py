@@ -15,7 +15,7 @@ from .meteo.base import BaseMeteoHandler
 from .resample import MeteoResampler
 from .datagaps import Gapfiller
 from .interpolate import BaseDistanceCalculator
-from .interpolate import Interpolator
+from .interpolate import Interpolator, CrossValidator
 from .array.writer import GridWriter
 from .database.db import InterpolationDB
 from .domain.schemas import _OBSERVATION_POINTS_SCHEMA
@@ -146,13 +146,9 @@ class RuntimeContext:
         ## Interpolator
         self.interpolator = Interpolator.from_config(interpolation_config)
 
-        cv_config = config.get("cross_validation")
-        if cv_config is None or not cv_config.get("enabled", False):
-            self.cross_validation_config = None
-            logger.info("No cross-validation configuration provided. Cross-validation will be skipped")
-        else:
-            self.cross_validation_config = dict(cv_config)
-            self.cross_validation_config.pop("enabled", None)
+        ## Cross Validation
+        cv_config = config.get("cross_validation", {})
+        self.cross_validator = CrossValidator(**cv_config)
 
         ## Grid Writer
         output_config = config.get('output')

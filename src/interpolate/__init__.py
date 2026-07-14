@@ -1,6 +1,6 @@
 from .interpolator import Interpolator, InterpolationJob
 from .regions import InterpolationRegions
-from .cv import CrossValidationResult, cross_validate
+from .cv import CrossValidationResult, CrossValidator
 from .distance import BaseDistanceCalculator
 
 __all__ = [
@@ -9,5 +9,5 @@ __all__ = [
     "InterpolationJob",
     "InterpolationRegions",
     "Interpolator",
-    "cross_validate",
+    "CrossValidator",
 ]

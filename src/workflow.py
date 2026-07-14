@@ -11,7 +11,6 @@ import logging
 
 from .runtime import RuntimeContext
 from .domain.meteo_data import MeteoData
-from .interpolate import cross_validate
 
 logger = logging.getLogger(__name__)
 
@@ -234,34 +233,26 @@ class InterpolationWorkflow:
                 )
                 continue
 
-            lam_value = None
-            cv_result = None
-            cross_validation_config = getattr(self.context, "cross_validation_config", None)
-            if cross_validation_config is not None:
-                cv_config = dict(cross_validation_config)
-                apply_best_params = cv_config.pop("apply_best_params", True)
-                cv_result = cross_validate(
-                    self.context.interpolator,
-                    job,
-                    distance_fields=run_distance_fields,
-                    **cv_config,
-                )
-                if apply_best_params:
-                    lam_value = cv_result.best_params.get("lambda")
-                logger.info(
-                    "Cross-validation selected parameters for %s: %s (%s=%s)",
-                    job,
-                    cv_result.best_params,
-                    cv_result.select_by,
-                    cv_result.best_score,
-                )
+            cv_result = self.context.cross_validator.cross_validate(
+                self.context.interpolator,
+                job,
+                distance_fields=run_distance_fields,
+            )
+
+            logger.info(
+                "Cross-validation selected parameters for %s: %s (%s=%s)",
+                job,
+                cv_result.best_params,
+                cv_result.select_by,
+                cv_result.best_score,
+            )
 
             fitted = self.context.interpolator.fit(job)
             prediction = self.context.interpolator.predict(
                 fitted,
                 prediction_target,
                 distance_fields=run_distance_fields,
-                lam_value=lam_value,
+                lam_value=cv_result.best_params.get("lambda"),
             )
 
             if isinstance(prediction, (xr.DataArray, xr.Dataset)):
@@ -296,7 +287,7 @@ if __name__ == '__main__':
         runtime = await RuntimeContext.from_config_file('config.example.yaml')
         workflow = InterpolationWorkflow(runtime)
         start = pd.Timestamp("2026-01-25", tz=runtime.timezone)
-        end = pd.Timestamp("2026-01-26", tz=runtime.timezone)
+        end = pd.Timestamp("2026-01-30", tz=runtime.timezone)
         await workflow.run(param='tair_2m', start=start, end=end)
 
     logger.info("="*50)
