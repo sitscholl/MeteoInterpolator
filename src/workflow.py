@@ -207,8 +207,8 @@ class InterpolationWorkflow:
             groupby_cols = ['station_id']
         )
 
-        ## Get station elevation from dem
-        # meteo_data.update_elevation(self.context.dem)
+        ## Use DEM-derived station elevations for consistency with target elevation values.
+        meteo_data = meteo_data.update_elevation(self.context.dem, overwrite=True)
 
         grid_writer = (
             self.context.grid_writer.initialize(param=param, start=start, end=end, freq=_FREQ)

@@ -3,11 +3,13 @@ import logging
 
 import pandas as pd
 import geopandas as gpd
+import xarray as xr
 import rioxarray  # noqa: F401
 from shapely.geometry import Point
 from pyproj import CRS
 
 from ..aoi import AOI
+from ..domain.dem import DEM
 from ..meteo.base import Station
 from ..domain.schemas import _STATION_DATA_SCHEMA, _OBSERVATION_POINTS_SCHEMA
 from ..interpolate import InterpolationJob
@@ -97,6 +99,44 @@ class MeteoData:
             return type(self)(stations=self.stations, observations=self.observations)
 
         return type(self)(stations=self.stations.to_crs(target_crs), observations=self.observations)
+
+    def update_elevation(self, dem: DEM, overwrite: bool = False) -> "MeteoData":
+        if not isinstance(dem, DEM):
+            raise TypeError(f"dem must be a DEM. Got {type(dem)}")
+
+        stations = self.stations.copy()
+        if "elevation" not in stations.columns:
+            stations["elevation"] = pd.NA
+
+        fill_mask = pd.Series(overwrite, index=stations.index) if overwrite else stations["elevation"].isna()
+        if not fill_mask.any():
+            return type(self)(stations=stations, observations=self.observations)
+
+        dem_data = dem.data
+        projected = stations.loc[fill_mask].to_crs(dem.crs)
+        x_coords = projected.geometry.x.astype(float)
+        y_coords = projected.geometry.y.astype(float)
+
+        x_values = dem_data.coords["x"].values
+        y_values = dem_data.coords["y"].values
+        outside = projected.index[
+            ~(
+                x_coords.between(min(x_values), max(x_values))
+                & y_coords.between(min(y_values), max(y_values))
+            )
+        ].astype(str).tolist()
+        if outside:
+            raise ValueError(
+                "Cannot update station elevation because station points are outside the DEM extent. "
+                f"Check CRS and DEM extent for ids: {outside}"
+            )
+
+        x_indexer = xr.DataArray(x_coords.to_numpy(dtype=float), dims=("station_id",))
+        y_indexer = xr.DataArray(y_coords.to_numpy(dtype=float), dims=("station_id",))
+        sampled_elevation = dem_data.sel(x=x_indexer, y=y_indexer, method="nearest").to_numpy()
+        stations.loc[fill_mask, "elevation"] = sampled_elevation
+
+        return type(self)(stations=stations, observations=self.observations)
 
     def get_projected_station_coords(self, target: CRS | str | int | object) -> dict[str, tuple[float, float]]:
         target_crs = getattr(getattr(target, "rio", None), "crs", None) or target

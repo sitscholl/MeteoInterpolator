@@ -1,5 +1,6 @@
 import pandas as pd
 import geopandas as gpd
+import numpy as np
 import xarray as xr
 import rioxarray  # noqa: F401
 from pathlib import Path
@@ -71,3 +72,71 @@ def test_build_jobs_is_single_parameter_and_end_exclusive():
     assert x_coords.tolist() == [11.0, 11.1, 11.2]
     assert y_coords.tolist() == [46.0, 46.1, 46.2]
     assert ids.tolist() == ["a", "b", "c"]
+
+
+def test_update_elevation_fills_missing_values_from_dem_by_default():
+    tz = "Europe/Rome"
+    stations = gpd.GeoDataFrame(
+        {
+            "station_id": ["a", "b"],
+            "elevation": [999.0, np.nan],
+        },
+        geometry=[Point(11.0, 46.0), Point(11.1, 46.1)],
+        crs=4326,
+    ).set_index("station_id")
+    meteo_data = MeteoData(
+        stations=stations,
+        observations=pd.DataFrame(
+            {
+                "station_id": ["a", "b"],
+                "datetime": pd.to_datetime(["2026-05-13", "2026-05-13"]).tz_localize(tz),
+                "tair_2m": [10.0, 9.0],
+            }
+        ),
+    )
+    dem = _dem(
+        xr.DataArray(
+            [[100.0, 200.0], [300.0, 400.0]],
+            dims=("y", "x"),
+            coords={"y": [46.0, 46.1], "x": [11.0, 11.1]},
+        ).rio.write_crs(4326)
+    )
+
+    updated = meteo_data.update_elevation(dem)
+
+    assert updated.stations.loc["a", "elevation"] == 999.0
+    assert updated.stations.loc["b", "elevation"] == 400.0
+
+
+def test_update_elevation_overwrite_replaces_all_values_from_dem():
+    tz = "Europe/Rome"
+    stations = gpd.GeoDataFrame(
+        {
+            "station_id": ["a", "b"],
+            "elevation": [999.0, np.nan],
+        },
+        geometry=[Point(11.0, 46.0), Point(11.1, 46.1)],
+        crs=4326,
+    ).set_index("station_id")
+    meteo_data = MeteoData(
+        stations=stations,
+        observations=pd.DataFrame(
+            {
+                "station_id": ["a", "b"],
+                "datetime": pd.to_datetime(["2026-05-13", "2026-05-13"]).tz_localize(tz),
+                "tair_2m": [10.0, 9.0],
+            }
+        ),
+    )
+    dem = _dem(
+        xr.DataArray(
+            [[100.0, 200.0], [300.0, 400.0]],
+            dims=("y", "x"),
+            coords={"y": [46.0, 46.1], "x": [11.0, 11.1]},
+        ).rio.write_crs(4326)
+    )
+
+    updated = meteo_data.update_elevation(dem, overwrite=True)
+
+    assert updated.stations.loc["a", "elevation"] == 100.0
+    assert updated.stations.loc["b", "elevation"] == 400.0
