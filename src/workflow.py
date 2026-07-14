@@ -185,8 +185,8 @@ class InterpolationWorkflow:
             else prediction_target.attrs["crs"]
         )
 
-        logger.info(f"Requesting data for {len(self.context.stations)} stations.")
-        meteo_data = await self._load_meteo_data(self.context.stations, start, end, param)
+        logger.info(f"Requesting data for {len(self.context.station_ids)} stations.")
+        meteo_data = await self._load_meteo_data(self.context.station_ids, start, end, param)
         logger.info(f"Loaded data for {meteo_data.n_stations} stations.")
 
         meteo_data = meteo_data.to_crs(target_crs)
@@ -287,10 +287,13 @@ class InterpolationWorkflow:
 
 if __name__ == '__main__':
 
-    logging.basicConfig(level = logging.DEBUG, force = True)
+    logging.basicConfig(level = logging.DEBUG, force = True, format='[%(asctime)s] %(name)s - %(levelname)s : %(message)s')
+    logging.getLogger('httpx').setLevel(logging.WARNING)
+    logging.getLogger('httpcore').setLevel(logging.WARNING)
+    logging.getLogger('rasterio').setLevel(logging.WARNING)
 
     async def test_workflow():
-        runtime = RuntimeContext.from_config_file('config.example.yaml')
+        runtime = await RuntimeContext.from_config_file('config.example.yaml')
         workflow = InterpolationWorkflow(runtime)
         start = pd.Timestamp("2026-01-25", tz=runtime.timezone)
         end = pd.Timestamp("2026-01-26", tz=runtime.timezone)

@@ -9,7 +9,7 @@ from src.workflow import InterpolationWorkflow
 
 logger = logging.getLogger(__name__)
 
-def main():
+async def _main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('-p', '--param', required=True, help = 'Parameter to interpolate, for instance tair_2m')
@@ -29,7 +29,7 @@ def main():
     logger.info("Starting interpolation at %s", datetime.now().strftime("%H:%M:%S"))
     logger.info("="*50)
 
-    runtime = RuntimeContext.from_config_file(args.config)
+    runtime = await RuntimeContext.from_config_file(args.config)
     start = localize_datetime_string(args.start, runtime.timezone)
     end = localize_datetime_string(args.end, runtime.timezone)
     interpolation_workflow = InterpolationWorkflow(runtime)
@@ -40,7 +40,7 @@ def main():
         # runtime.cluster_manager.spin_up_workers() #will be implemented later
 
         logger.info(f"Starting interpolation workflow for parameter {args.param} over period {start} - {end}")
-        result = asyncio.run(interpolation_workflow.run(param = args.param, start = start, end = end))
+        result = await interpolation_workflow.run(param = args.param, start = start, end = end)
         logger.info("Interpolation workflow produced %s grid(s)", len(result))
 
     except Exception:
@@ -52,6 +52,10 @@ def main():
         logger.info("="*50)
         logger.info("Finished interpolation at %s", datetime.now().strftime("%H:%M:%S"))
         logger.info("="*50)
+
+
+def main():
+    asyncio.run(_main())
 
 
 if __name__ == "__main__":
