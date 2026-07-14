@@ -2,12 +2,15 @@ from uuid import uuid4
 from datetime import datetime
 import asyncio
 import pandas as pd
+import geopandas as gpd
 import xarray as xr
+import rioxarray  # noqa: F401
+from pyproj import CRS
 
 import logging
 
 from .runtime import RuntimeContext
-from .meteo.types import MeteoData
+from .domain.meteo_data import MeteoData
 from .interpolate import cross_validate
 
 logger = logging.getLogger(__name__)
@@ -18,10 +21,11 @@ _MIN_SAMPLE_SIZE = 60
 
 class InterpolationWorkflow:
 
-    def __init__(self, runtime_context: RuntimeContext):
+    def __init__(self, runtime_context: RuntimeContext, target_points: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame | None = None):
         self.id = uuid4()
         self.timestamp = None
         self.context = runtime_context
+        self.target_points = target_points
 
         logger.info("Initialized InterpolationWorkflow")
 
@@ -51,6 +55,65 @@ class InterpolationWorkflow:
             data = data.assign_coords(time=[pd.Timestamp(interp_date)])
         return data
 
+    def _prepare_target_points(
+        self,
+        target_points: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame | None,
+    ) -> xr.DataArray | pd.DataFrame | gpd.GeoDataFrame:
+        if target_points is None:
+            return self.context.dem.data
+
+        dem_crs = self.context.dem.crs
+
+        if isinstance(target_points, xr.DataArray):
+            if target_points.rio.crs is None:
+                target_points = target_points.rio.write_crs(dem_crs, inplace=False)
+            if CRS.from_user_input(target_points.rio.crs) != CRS.from_user_input(dem_crs):
+                raise ValueError(
+                    "Target grid CRS must match DEM CRS. Reproject/resample the target grid before interpolation."
+                )
+            return target_points
+
+        if isinstance(target_points, gpd.GeoDataFrame):
+            if target_points.crs is None:
+                raise ValueError("Target point GeoDataFrame must define a CRS.")
+            points = target_points.to_crs(dem_crs).copy()
+            if "station_id" not in points.columns:
+                points["station_id"] = points.index.astype(str)
+            points["x"] = points.geometry.x.astype(float)
+            points["y"] = points.geometry.y.astype(float)
+        elif isinstance(target_points, pd.DataFrame):
+            points = target_points.copy()
+            point_crs = points.attrs.get("crs")
+            if point_crs is not None and CRS.from_user_input(point_crs) != CRS.from_user_input(dem_crs):
+                raise ValueError(
+                    "Plain DataFrame target_points cannot be reprojected. "
+                    "Pass a GeoDataFrame with geometry and CRS, or provide x/y in the DEM CRS."
+                )
+            points.attrs["crs"] = dem_crs
+            if "station_id" not in points.columns:
+                points["station_id"] = points.index.astype(str)
+        else:
+            raise TypeError(
+                "target_points must be None, an xarray DataArray, a pandas DataFrame, "
+                f"or a GeoDataFrame. Got {type(target_points)}"
+            )
+
+        missing_xy = [col for col in ("x", "y") if col not in points.columns]
+        if missing_xy:
+            raise ValueError(f"Point target predictions require x/y columns. Missing: {missing_xy}")
+
+        if "elevation" not in points.columns:
+            x_indexer = xr.DataArray(points["x"].to_numpy(dtype=float), dims=("station_id",))
+            y_indexer = xr.DataArray(points["y"].to_numpy(dtype=float), dims=("station_id",))
+            points["elevation"] = self.context.dem.data.sel(
+                x=x_indexer,
+                y=y_indexer,
+                method="nearest",
+            ).to_numpy()
+
+        points.attrs["crs"] = dem_crs
+        return points
+
     def prepare_distance_fields(self, jobs, meteo_data):
         distance_calculator = self.context.distance_calculator
         if distance_calculator is not None:
@@ -78,9 +141,23 @@ class InterpolationWorkflow:
         else:
             return None
 
-    async def run(self, param: str, start: datetime, end: datetime):       
+    async def run(
+        self,
+        param: str,
+        start: datetime,
+        end: datetime,
+        target_points: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame | None = None,
+    ):       
         self.timestamp = datetime.now()
         self._validate_dates(start, end)
+        prediction_target = self._prepare_target_points(
+            self.target_points if target_points is None else target_points
+        )
+        target_crs = (
+            prediction_target.rio.crs
+            if isinstance(prediction_target, xr.DataArray)
+            else prediction_target.attrs["crs"]
+        )
 
         if self.context.stations is None:
             async with self.context.meteo_loader as meteo_loader:
@@ -114,6 +191,7 @@ class InterpolationWorkflow:
             raise ValueError("No stations are within supplied dem.")
         if n_dropped > 0:
             logger.warning(f"Dropped {n_dropped} stations outside dem")
+        meteo_data = meteo_data.to_crs(target_crs)
 
         if meteo_data.n_stations < self.context.interpolator.min_sample_size:
             raise ValueError(f"Only {meteo_data.n_stations} available, interpolation requires {self.context.interpolator.min_sample_size}")
@@ -138,7 +216,7 @@ class InterpolationWorkflow:
             else None
         )
 
-        jobs = list(meteo_data.build_jobs(start, end, param, dem = self.context.dem))
+        jobs = list(meteo_data.build_jobs(start, end, param))
 
         run_distance_fields = self.prepare_distance_fields(jobs, meteo_data)
 
@@ -180,19 +258,28 @@ class InterpolationWorkflow:
                     cv_result.best_score,
                 )
 
-            prediction = self.context.interpolator.fit(job).predict(
+            fitted = self.context.interpolator.fit(job)
+            prediction = self.context.interpolator.predict(
+                fitted,
+                prediction_target,
                 distance_fields=run_distance_fields,
                 lam_value=lam_value,
             )
 
-            output_grid = self._prepare_grid_for_output(prediction, job.parameter, job.timestamp)
-            if grid_writer is not None:
-                grid_writer.write(output_grid)
+            if isinstance(prediction, (xr.DataArray, xr.Dataset)):
+                output = self._prepare_grid_for_output(prediction, job.parameter, job.timestamp)
+                if grid_writer is not None:
+                    grid_writer.write(output)
+            else:
+                output = prediction.to_frame(name=job.parameter)
+                output.insert(0, "datetime", job.timestamp)
+                if grid_writer is not None:
+                    logger.warning("Grid writer is configured but target_points produced point predictions; skipping grid write.")
 
             if cv_result is not None and self.context.db is not None and hasattr(self.context.db, "store_cv_results"):
                 self.context.db.store_cv_results(cv_result.fold_results, timestamp=job.timestamp)
 
-            results.append(output_grid)
+            results.append(output)
 
         if len(results) == 0:
             raise ValueError(f"No interpolation results were produced for parameter {param} over period {start} - {end}.")

@@ -6,6 +6,7 @@ import rioxarray  # noqa: F401
 
 from dataclasses import dataclass
 import logging
+from pyproj import CRS
 
 from .vertical import BaseFittedVerticalModel, BaseVerticalModel
 from .distance import DistanceField
@@ -28,6 +29,11 @@ class InterpolationJob:
         return [self.parameter, *_REQUIRED_COLUMNS]
 
     def __post_init__(self):
+        object.__setattr__(self, "observations", self.observations.copy())
+        self.observations["station_id"] = self.observations["station_id"].astype(str)
+        object.__setattr__(self, "training_points", self.training_points.copy())
+        self.training_points.index = self.training_points.index.astype(str)
+
         for req_col in self.required_columns:
             if req_col not in self.observations.columns:
                 raise ValueError(f"InterpolationJob observations is missing required column {req_col}. Got {self.observations.columns}")
@@ -46,12 +52,13 @@ class InterpolationJob:
             raise ValueError("InterpolationJob training_points crs cannot be None.")
 
     def to_arrays(self):
-        x_coords = self.training_points.geometry.x.to_numpy(dtype=float)
-        y_coords = self.training_points.geometry.y.to_numpy(dtype=float)
+        ids = self.observations["station_id"].to_numpy(dtype=str)
+        training_points = self.training_points.loc[ids]
+        x_coords = training_points.geometry.x.to_numpy(dtype=float)
+        y_coords = training_points.geometry.y.to_numpy(dtype=float)
 
         y = self.observations[self.parameter].to_numpy(dtype=float)
         X = self.observations["elevation"].to_numpy(dtype=float).reshape(-1, 1)
-        ids = self.observations["station_id"].to_numpy(dtype=str)
 
         return y, X, x_coords, y_coords, ids
 
@@ -63,6 +70,14 @@ class FittedInterpolator:
     vertical_fit: BaseFittedVerticalModel
     residuals: xr.DataArray
     job: InterpolationJob
+
+    @property
+    def parameter(self) -> str:
+        return self.job.parameter
+
+    @property
+    def timestamp(self) -> pd.Timestamp:
+        return self.job.timestamp
 
 @dataclass
 class Interpolator:
@@ -144,6 +159,33 @@ class Interpolator:
                 )
 
     @staticmethod
+    def _crs_from_target(target) -> CRS | None:
+        if isinstance(target, gpd.GeoDataFrame):
+            return CRS.from_user_input(target.crs) if target.crs is not None else None
+
+        rio = getattr(target, "rio", None)
+        if rio is not None and getattr(rio, "crs", None) is not None:
+            return CRS.from_user_input(rio.crs)
+
+        attrs = getattr(target, "attrs", {})
+        if isinstance(attrs, dict) and attrs.get("crs") is not None:
+            return CRS.from_user_input(attrs["crs"])
+
+        return None
+
+    @classmethod
+    def _check_prediction_crs(cls, model: FittedInterpolator, target) -> None:
+        training_crs = CRS.from_user_input(model.job.training_points.crs)
+        target_crs = cls._crs_from_target(target)
+        if target_crs is None:
+            raise ValueError("Prediction target CRS cannot be None.")
+        if target_crs != training_crs:
+            raise ValueError(
+                "Prediction target CRS does not match interpolation training point CRS. "
+                f"Got {target_crs.to_string()} vs {training_crs.to_string()}."
+            )
+
+    @staticmethod
     def _residual_array(residuals, ids, x_coords, y_coords) -> xr.DataArray:
         return xr.DataArray(
             np.asarray(residuals, dtype=float),
@@ -158,6 +200,15 @@ class Interpolator:
 
     @staticmethod
     def _point_frame_to_arrays(points: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        points = points.copy()
+        if isinstance(points, gpd.GeoDataFrame):
+            if "x" not in points.columns:
+                points["x"] = points.geometry.x
+            if "y" not in points.columns:
+                points["y"] = points.geometry.y
+            if "station_id" not in points.columns:
+                points["station_id"] = points.index.astype(str)
+
         missing_cols = [col for col in _REQUIRED_COLUMNS if col not in points.columns]
         if missing_cols:
             raise ValueError(f"Point predictions require columns {_REQUIRED_COLUMNS}. Missing: {missing_cols}")
@@ -199,16 +250,17 @@ class Interpolator:
     def predict(
         self,
         model: FittedInterpolator,
-        target_points: xr.DataArray | pd.DataFrame,
+        target_points: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame,
         distance_fields: DistanceField | xr.DataArray | None = None,
         lam_value: float | int | None = None,
     ) -> xr.DataArray | pd.Series:
-        ## TODO: Make sure target_points has the same crs that was used when calling .fit()
         if isinstance(target_points, xr.DataArray):
+            self._check_prediction_crs(model, target_points)
             return self._predict_grid(
                 model, target_points, distance_fields=distance_fields, lam_value=lam_value
                 )
-        if isinstance(target_points):
+        if isinstance(target_points, (pd.DataFrame, gpd.GeoDataFrame)):
+            self._check_prediction_crs(model, target_points)
             return self._predict_points(
                 model, target_points, distance_fields=distance_fields, lam_value=lam_value
                 )

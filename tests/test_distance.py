@@ -5,7 +5,7 @@ import xarray as xr
 from pathlib import Path
 
 from src.array.cache import CacheManager
-from src.array.dem import DEM
+from src.domain.dem import DEM
 from src.interpolate.distance import DistanceField, PathDistanceCalculator
 
 

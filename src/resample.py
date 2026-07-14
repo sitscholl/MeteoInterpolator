@@ -3,7 +3,7 @@ import pandas as pd
 import logging
 from typing import Callable, Any, Iterable
 
-from .meteo.types import MeteoData
+from .domain.meteo_data import MeteoData
 
 logger = logging.getLogger(__name__)
 
@@ -170,28 +170,17 @@ class MeteoResampler:
         if meteo_data.n_stations == 0:
             return meteo_data
 
-        resampled_tables: list[pd.DataFrame] = []
-
-        for tbl in meteo_data.data:
-            if tbl is None or tbl.empty:
-                resampled_tables.append(tbl.copy() if tbl is not None else tbl)
-                continue
-
-            resampled = self.apply_resampling(
-                tbl,
-                freq=freq,
-                datetime_col=datetime_col,
-                groupby_cols=groupby_cols,
-                min_sample_size=min_sample_size,
-            )
-            resampled_tables.append(resampled)
+        resampled = self.apply_resampling(
+            meteo_data.observations,
+            freq=freq,
+            datetime_col=datetime_col,
+            groupby_cols=groupby_cols,
+            min_sample_size=min_sample_size,
+        )
 
         return MeteoData(
-            ids=meteo_data.ids,
-            coords=meteo_data.coords,
-            elevation=meteo_data.elevation,
-            data=resampled_tables,
-            crs=meteo_data.crs,
+            stations=meteo_data.stations,
+            observations=resampled,
         )
 
 

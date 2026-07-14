@@ -4,11 +4,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import geopandas as gpd
 import xarray as xr
 import rioxarray  # noqa: F401
+from shapely.geometry import Point
 
 from src.array.cache import CacheManager
-from src.array.dem import DEM
+from src.domain.dem import DEM
 from src.interpolate.distance import DistanceField
 from src.interpolate.idw import InverseDistanceWeighting
 from src.interpolate.interpolator import InterpolationJob, Interpolator
@@ -21,6 +23,14 @@ def _dem(data: xr.DataArray) -> DEM:
         data=data,
         fingerprint=CacheManager.array_fingerprint(data),
     )
+
+
+def _training_points(observations: pd.DataFrame, crs=4326) -> gpd.GeoDataFrame:
+    return gpd.GeoDataFrame(
+        observations[["station_id", "elevation"]].copy(),
+        geometry=[Point(x, y) for x, y in zip(observations["x"], observations["y"])],
+        crs=crs,
+    ).set_index("station_id")
 
 
 def test_linear_fit_returns_immutable_fitted_model():
@@ -50,12 +60,12 @@ def test_residual_array_uses_id_dimension_with_station_coordinates():
     assert residuals.y.values.tolist() == [30.0, 40.0]
 
 
-def test_interpolator_requires_dem_with_matching_crs():
+def test_interpolator_requires_target_with_matching_crs():
     target_grid = xr.DataArray(
         [[0.0]],
         dims=("y", "x"),
         coords={"y": [0.0], "x": [0.0]},
-    )
+    ).rio.write_crs(3857)
     observations = pd.DataFrame(
         {
             "station_id": ["a"],
@@ -66,24 +76,16 @@ def test_interpolator_requires_dem_with_matching_crs():
         }
     )
 
-    with pytest.raises(TypeError, match="dem must be a DEM"):
-        Interpolator(
-            dem=target_grid,
-            vertical_model=LinearVerticalModel(),
-        )
-
     job = InterpolationJob(
         timestamp=pd.Timestamp("2026-05-13"),
         parameter="tair_2m",
         observations=observations,
-        crs=4326,
+        training_points=_training_points(observations, crs=4326),
     )
-    interpolator = Interpolator(
-        dem=_dem(target_grid.rio.write_crs(3857)),
-        vertical_model=LinearVerticalModel(),
-    )
+    interpolator = Interpolator(vertical_model=LinearVerticalModel(), min_sample_size=1)
+
     with pytest.raises(ValueError, match="does not match"):
-        interpolator.fit(job)
+        interpolator.predict(interpolator.fit(job), target_grid)
 
 
 def test_interpolator_returns_result_and_adds_idw_residuals():
@@ -117,19 +119,19 @@ def test_interpolator_returns_result_and_adds_idw_residuals():
         timestamp=pd.Timestamp("2026-05-13"),
         parameter="tair_2m",
         observations=observations,
-        crs=4326,
+        training_points=_training_points(observations),
     )
     interpolator = Interpolator(
-        dem=_dem(target_grid),
         vertical_model=LinearVerticalModel(),
         residual_model=InverseDistanceWeighting(neighbours=1),
         min_sample_size=3,
     )
 
-    result = interpolator.fit(job).predict(distance_fields=DistanceField("test_distance", distances))
+    fitted = interpolator.fit(job)
+    result = interpolator.predict(fitted, target_grid, distance_fields=DistanceField("test_distance", distances))
 
-    assert interpolator.timestamp_ == pd.Timestamp("2026-05-13")
-    assert interpolator.parameter_ == "tair_2m"
+    assert fitted.timestamp == pd.Timestamp("2026-05-13")
+    assert fitted.parameter == "tair_2m"
     assert result.dims == ("y", "x")
     xr.testing.assert_equal(result.x, target_grid.x)
     xr.testing.assert_equal(result.y, target_grid.y)
@@ -172,15 +174,16 @@ def test_interpolator_predicts_points_with_idw_residuals():
         timestamp=pd.Timestamp("2026-05-13"),
         parameter="tair_2m",
         observations=observations,
-        crs=4326,
+        training_points=_training_points(observations),
     )
     interpolator = Interpolator(
-        dem=_dem(target_grid),
         vertical_model=LinearVerticalModel(),
         residual_model=InverseDistanceWeighting(neighbours=1),
     )
+    observations.attrs["crs"] = 4326
 
-    result = interpolator.fit(job).predict(observations, distance_fields=distances)
+    fitted = interpolator.fit(job)
+    result = interpolator.predict(fitted, observations, distance_fields=distances)
 
     assert isinstance(result, pd.Series)
     assert result.index.tolist() == ["a", "b", "c"]

@@ -3,11 +3,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import geopandas as gpd
 import rioxarray  # noqa: F401
 import xarray as xr
+from shapely.geometry import Point
 
 from src.array.cache import CacheManager
-from src.array.dem import DEM
+from src.domain.dem import DEM
 from src.interpolate import cross_validate
 from src.interpolate.distance import DistanceField
 from src.interpolate.idw import InverseDistanceWeighting
@@ -24,11 +26,16 @@ def _dem(data: xr.DataArray) -> DEM:
 
 
 def _job(observations: pd.DataFrame) -> InterpolationJob:
+    training_points = gpd.GeoDataFrame(
+        observations[["station_id", "elevation"]].copy(),
+        geometry=[Point(x, y) for x, y in zip(observations["x"], observations["y"])],
+        crs=4326,
+    ).set_index("station_id")
     return InterpolationJob(
         timestamp=pd.Timestamp("2026-05-13"),
         parameter="tair_2m",
         observations=observations,
-        crs=4326,
+        training_points=training_points,
     )
 
 
@@ -79,7 +86,6 @@ def test_cross_validate_selects_best_lambda_from_leave_one_out():
         ),
     )
     interpolator = Interpolator(
-        dem=_dem(grid),
         vertical_model=LinearVerticalModel(),
         residual_model=InverseDistanceWeighting(neighbours=1),
         min_sample_size=3,
@@ -117,7 +123,6 @@ def test_cross_validate_vertical_scope_without_distance_fields():
         }
     )
     interpolator = Interpolator(
-        dem=_dem(grid),
         vertical_model=LinearVerticalModel(),
         min_sample_size=2,
     )

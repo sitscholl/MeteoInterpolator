@@ -7,6 +7,7 @@ import rioxarray  # noqa: F401
 from shapely.geometry import Point
 from pyproj import CRS
 
+from ..aoi import AOI
 from ..meteo.base import Station
 from ..domain.schemas import _STATION_DATA_SCHEMA, _OBSERVATION_POINTS_SCHEMA
 from ..interpolate import InterpolationJob
@@ -23,15 +24,15 @@ class MeteoData:
         _STATION_DATA_SCHEMA.validate(self.observations)
         _OBSERVATION_POINTS_SCHEMA.validate(self.stations)
 
-        stations_ids = self.stations.index
-        observation_ids = self.observations['station_id'].unique()
+        stations_ids = pd.Index(self.stations.index.astype(str))
+        observation_ids = pd.Index(self.observations['station_id'].astype(str).unique())
 
         missing_ids_observations = stations_ids.difference(observation_ids)
-        if missing_ids_observations:
+        if len(missing_ids_observations) > 0:
             raise ValueError(f"The following ids are in the stations table but not in the observations table: {missing_ids_observations}")
 
         missing_ids_stations = observation_ids.difference(stations_ids)
-        if missing_ids_stations:
+        if len(missing_ids_stations) > 0:
             raise ValueError(f"The following ids are in the observations table but not in the stations table: {missing_ids_stations}")
 
         if self.stations.crs is None:
@@ -44,6 +45,16 @@ class MeteoData:
     def from_list(cls, lst: list[Station]):
 
         stations = [st for st in lst if st.data is not None]
+        if not stations:
+            empty_stations = gpd.GeoDataFrame(
+                {"elevation": []},
+                geometry=[],
+                crs=4326,
+            )
+            empty_stations.index = pd.Index([], name="station_id")
+            empty_observations = pd.DataFrame(columns=["datetime", "station_id", "tair_2m"])
+            return cls(stations=empty_stations, observations=empty_observations)
+
         crs = set([st.crs for st in stations])
         if len(crs) > 1:
             raise ValueError(f"Cannot construct MeteoData from stations with different coordinate systems. Got {crs}")
@@ -70,6 +81,15 @@ class MeteoData:
     def available_stations(self):
         return self.stations.index.values
 
+    def filter_bbox(self, aoi: AOI, buffer_m: int | float | None = None) -> tuple["MeteoData", int]:
+        stations = aoi.filter_bbox(self.stations, buffer_m=buffer_m)
+        station_ids = stations.index.astype(str)
+        observations = self.observations.loc[
+            self.observations["station_id"].astype(str).isin(station_ids)
+        ].copy()
+        n_dropped = self.n_stations - len(stations)
+        return type(self)(stations=stations, observations=observations), n_dropped
+
     def to_crs(self, crs: CRS | str | int) -> "MeteoData":
 
         target_crs = CRS.from_user_input(crs)
@@ -77,6 +97,14 @@ class MeteoData:
             return type(self)(stations=self.stations, observations=self.observations)
 
         return type(self)(stations=self.stations.to_crs(target_crs), observations=self.observations)
+
+    def get_projected_station_coords(self, target: CRS | str | int | object) -> dict[str, tuple[float, float]]:
+        target_crs = getattr(getattr(target, "rio", None), "crs", None) or target
+        projected = self.stations.to_crs(CRS.from_user_input(target_crs))
+        return {
+            str(station_id): (float(row.geometry.x), float(row.geometry.y))
+            for station_id, row in projected.iterrows()
+        }
 
     def get_station_data(self, station_id: str):
         station_id = str(station_id)
@@ -104,9 +132,13 @@ class MeteoData:
             raise ValueError(f"{param} not found in MeteoData observations. Choose one of {self.observations.columns}")
         observations = self._get_observations(start = start, end = end, param = param)
 
-        missing_cols = [i for i in _REQUIRED_COLUMNS if i not in observations.columns]
-        if missing_cols:
-            raise ValueError(f"Creating InterpolationJob requires the following columns to be present in the data {_REQUIRED_COLUMNS}. Got {observations.columns}. Missing: {missing_cols}")
+        station_attrs = self.stations.copy()
+        station_attrs["station_id"] = station_attrs.index.astype(str)
+        station_attrs["x"] = station_attrs.geometry.x.astype(float)
+        station_attrs["y"] = station_attrs.geometry.y.astype(float)
+        station_attrs = pd.DataFrame(station_attrs.drop(columns="geometry")).reset_index(drop=True)
+        station_attrs = station_attrs[["station_id", "elevation", "x", "y"]]
+        observations = observations.merge(station_attrs, on="station_id", how="left", validate="many_to_one")
 
         for interp_date, subset in observations.groupby('datetime'):
             ts = pd.to_datetime(interp_date)
@@ -122,7 +154,8 @@ class MeteoData:
             if n_rows_after < n_rows_before:
                 logger.warning(f"Dropped {n_rows_before - n_rows_after} rows with NaN values for parameter {param} on timestamp {ts}")
 
-            obs_stations = self.stations.loc[self.stations.index.isin([obs['station_id'].unique()])]
+            obs_station_ids = obs["station_id"].astype(str).tolist()
+            obs_stations = self.stations.loc[obs_station_ids]
             job = InterpolationJob(
                 timestamp = ts,
                 parameter = param,

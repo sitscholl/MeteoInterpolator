@@ -9,7 +9,7 @@ import pandas as pd
 import xarray as xr
 
 from .distance import DistanceField
-from .interpolator import InterpolationJob, Interpolator
+from .interpolator import FittedInterpolator, InterpolationJob, Interpolator
 
 logger = logging.getLogger(__name__)
 
@@ -145,11 +145,12 @@ def _select_best(
 
 
 def _make_job_like(job: InterpolationJob, observations: pd.DataFrame) -> InterpolationJob:
+    station_ids = observations["station_id"].astype(str).tolist()
     return InterpolationJob(
         timestamp=job.timestamp,
         parameter=job.parameter,
         observations=observations,
-        crs=job.crs,
+        training_points=job.training_points.loc[station_ids],
     )
 
 
@@ -194,117 +195,105 @@ def cross_validate(
     observations = job.observations.reset_index(drop=True)
     point_distances = _point_distances(distance_fields, observations) if needs_distances else None
 
-    original_state = {
-        "vertical_fit_": estimator.vertical_fit_,
-        "residuals_": estimator.residuals_,
-        "timestamp_": estimator.timestamp_,
-        "parameter_": estimator.parameter_,
-        "station_ids_": estimator.station_ids_,
-    }
-
     rows = []
-    full_residuals = None
-    try:
-        if not refit_vertical_per_fold:
-            estimator.fit(job)
-            full_residuals = estimator.residuals_
+    full_fit = estimator.fit(job) if not refit_vertical_per_fold else None
 
-        for fold_idx, (train_idx, test_idx) in enumerate(_fold_indices(len(observations), cv)):
-            if len(test_idx) != 1:
-                raise ValueError("Only one held-out station per fold is currently supported.")
+    for fold_idx, (train_idx, test_idx) in enumerate(_fold_indices(len(observations), cv)):
+        if len(test_idx) != 1:
+            raise ValueError("Only one held-out station per fold is currently supported.")
 
-            train_obs = observations.iloc[train_idx].copy()
-            test_obs = observations.iloc[test_idx].copy()
-            test_id = str(test_obs["station_id"].iloc[0])
-            observed = float(test_obs[job.parameter].iloc[0])
-            train_ids = train_obs["station_id"].to_numpy(dtype=str)
+        train_obs = observations.iloc[train_idx].copy()
+        test_obs = observations.iloc[test_idx].copy()
+        test_obs.attrs["crs"] = job.training_points.crs
+        test_id = str(test_obs["station_id"].iloc[0])
+        observed = float(test_obs[job.parameter].iloc[0])
+        train_ids = train_obs["station_id"].to_numpy(dtype=str)
 
-            try:
-                if refit_vertical_per_fold:
-                    estimator.fit(_make_job_like(job, train_obs))
-                elif full_residuals is not None:
-                    estimator.residuals_ = full_residuals.sel(id=train_ids)
+        try:
+            if refit_vertical_per_fold:
+                fitted = estimator.fit(_make_job_like(job, train_obs))
+            else:
+                fitted = FittedInterpolator(
+                    vertical_fit=full_fit.vertical_fit,
+                    residuals=full_fit.residuals.sel(id=train_ids),
+                    job=_make_job_like(job, train_obs),
+                )
 
-                test_X = test_obs["elevation"].to_numpy(dtype=float).reshape(-1, 1)
-                vertical_pred = float(np.asarray(estimator.vertical_fit_.predict(test_X), dtype=float).reshape(-1)[0])
+            test_X = test_obs["elevation"].to_numpy(dtype=float).reshape(-1, 1)
+            vertical_pred = float(np.asarray(fitted.vertical_fit.predict(test_X), dtype=float).reshape(-1)[0])
 
-                if "vertical" in scopes:
-                    rows.append(
-                        {
-                            "fold": fold_idx,
-                            "station_id": test_id,
-                            "scope": "vertical",
-                            "lambda": np.nan,
-                            "observed": observed,
-                            "predicted": vertical_pred,
-                            "error": vertical_pred - observed,
-                        }
+            if "vertical" in scopes:
+                rows.append(
+                    {
+                        "fold": fold_idx,
+                        "station_id": test_id,
+                        "scope": "vertical",
+                        "lambda": np.nan,
+                        "observed": observed,
+                        "predicted": vertical_pred,
+                        "error": vertical_pred - observed,
+                    }
+                )
+
+            if {"overall", "residual"} & set(scopes):
+                fold_distances = (
+                    point_distances.sel(target_id=[test_id])
+                    if point_distances is not None
+                    else None
+                )
+                for params in candidates:
+                    lam_value = params.get("lambda")
+                    overall_pred = float(
+                        estimator.predict(
+                            fitted,
+                            test_obs,
+                            distance_fields=fold_distances,
+                            lam_value=lam_value,
+                        ).iloc[0]
                     )
-
-                if {"overall", "residual"} & set(scopes):
-                    fold_distances = (
-                        point_distances.sel(target_id=[test_id])
-                        if point_distances is not None
-                        else None
-                    )
-                    for params in candidates:
-                        lam_value = params.get("lambda")
-                        overall_pred = float(
-                            estimator.predict(
-                                test_obs,
-                                distance_fields=fold_distances,
-                                lam_value=lam_value,
-                            ).iloc[0]
-                        )
-                        if "overall" in scopes:
-                            rows.append(
-                                {
-                                    "fold": fold_idx,
-                                    "station_id": test_id,
-                                    "scope": "overall",
-                                    "lambda": lam_value,
-                                    "observed": observed,
-                                    "predicted": overall_pred,
-                                    "error": overall_pred - observed,
-                                }
-                            )
-                        if "residual" in scopes:
-                            rows.append(
-                                {
-                                    "fold": fold_idx,
-                                    "station_id": test_id,
-                                    "scope": "residual",
-                                    "lambda": lam_value,
-                                    "observed": observed - vertical_pred,
-                                    "predicted": overall_pred - vertical_pred,
-                                    "error": overall_pred - observed,
-                                }
-                            )
-
-            except Exception as e:
-                if error_score == "raise":
-                    raise
-                logger.warning("Cross-validation fold %s for station %s failed: %s", fold_idx, test_id, e)
-                for scope in scopes:
-                    scope_candidates = candidates if scope in {"overall", "residual"} else [{}]
-                    for params in scope_candidates:
+                    if "overall" in scopes:
                         rows.append(
                             {
                                 "fold": fold_idx,
                                 "station_id": test_id,
-                                "scope": scope,
-                                "lambda": params.get("lambda", np.nan),
+                                "scope": "overall",
+                                "lambda": lam_value,
                                 "observed": observed,
-                                "predicted": float(error_score),
-                                "error": float(error_score),
+                                "predicted": overall_pred,
+                                "error": overall_pred - observed,
                             }
                         )
-    finally:
-        estimator.vertical_fit_ = original_state["vertical_fit_"]
-        estimator.residuals_ = original_state["residuals_"]
-        estimator.timestamp_ = original_state["timestamp_"]
-        estimator.parameter_ = original_state["parameter_"]
-        estimator.station_ids_ = original_state["station_ids_"]
+                    if "residual" in scopes:
+                        rows.append(
+                            {
+                                "fold": fold_idx,
+                                "station_id": test_id,
+                                "scope": "residual",
+                                "lambda": lam_value,
+                                "observed": observed - vertical_pred,
+                                "predicted": overall_pred - vertical_pred,
+                                "error": overall_pred - observed,
+                            }
+                        )
+
+        except Exception as e:
+            if error_score == "raise":
+                raise
+            logger.warning("Cross-validation fold %s for station %s failed: %s", fold_idx, test_id, e)
+            for scope in scopes:
+                scope_candidates = candidates if scope in {"overall", "residual"} else [{}]
+                for params in scope_candidates:
+                    rows.append(
+                        {
+                            "fold": fold_idx,
+                            "station_id": test_id,
+                            "scope": scope,
+                            "lambda": params.get("lambda", np.nan),
+                            "observed": observed,
+                            "predicted": float(error_score),
+                            "error": float(error_score),
+                        }
+                    )
 
     fold_results = pd.DataFrame(rows)
     if not fold_results.empty:

@@ -3,7 +3,7 @@ import pytest
 import rioxarray  # noqa: F401
 import xarray as xr
 
-from src.array.dem import load_dem
+from src.domain.dem import load_dem
 
 
 def _source_grid(crs=None):
