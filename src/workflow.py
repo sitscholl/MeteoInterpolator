@@ -37,14 +37,27 @@ class InterpolationWorkflow:
             raise ValueError(f"start and end date must have the same timezone. Got {start.tzinfo} vs {end.tzinfo}")
         
     @staticmethod
-    def _prepare_grid_for_output(interpolated_grid: xr.DataArray | xr.Dataset, param: str, interp_date):
+    def _output_var_name(param: str, suffix: str | None = None) -> str:
+        parts = [str(param).strip()]
+        if suffix is not None:
+            parts.append(str(suffix).strip().strip("_"))
+        return "_".join(part for part in parts if part)
+
+    @classmethod
+    def _prepare_grid_for_output(cls, interpolated_grid: xr.DataArray | xr.Dataset, param: str, interp_date, suffix: str | None = None):
+        new_name = cls._output_var_name(param, suffix)
         if isinstance(interpolated_grid, xr.Dataset):
             data = interpolated_grid
-            if len(data.data_vars) == 1 and param not in data.data_vars:
+            data_vars = list(data.data_vars)
+            if len(data_vars) == 1 and data_vars[0] != new_name:
                 old_name = next(iter(data.data_vars))
-                data = data.rename({old_name: param})
+                data = data.rename({old_name: new_name})
+            elif param in data.data_vars and param != new_name:
+                if new_name in data.data_vars:
+                    raise ValueError(f"Cannot rename output variable {param!r} to existing variable {new_name!r}.")
+                data = data.rename({param: new_name})
         elif isinstance(interpolated_grid, xr.DataArray):
-            data = interpolated_grid.rename(param)
+            data = interpolated_grid.rename(new_name)
         else:
             raise TypeError(f"Interpolated grid must be an xarray DataArray or Dataset. Got {type(interpolated_grid)}")
 
@@ -239,31 +252,30 @@ class InterpolationWorkflow:
                 distance_fields=run_distance_fields,
             )
 
-            logger.info(
-                "Cross-validation selected parameters for %s: %s (%s=%s)",
-                job,
-                cv_result.best_params,
-                cv_result.select_by,
-                cv_result.best_score,
-            )
+            lam_value = None
+            if cv_result is not None:
+                lam_value = cv_result.best_params.get("lambda")
+                logger.info(
+                    "Cross-validation selected parameters for %s: %s (%s=%s)",
+                    job,
+                    cv_result.best_params,
+                    cv_result.select_by,
+                    cv_result.best_score,
+                )
 
             fitted = self.context.interpolator.fit(job)
-            prediction = self.context.interpolator.predict(
+            prediction_result = self.context.interpolator.predict(
                 fitted,
                 prediction_target,
                 distance_fields=run_distance_fields,
-                lam_value=cv_result.best_params.get("lambda"),
+                lam_value=lam_value,
             )
-
-            if isinstance(prediction, (xr.DataArray, xr.Dataset)):
-                output = self._prepare_grid_for_output(prediction, job.parameter, job.timestamp)
-                if grid_writer is not None:
-                    grid_writer.write(output)
-            else:
-                output = prediction.to_frame(name=job.parameter)
-                output.insert(0, "datetime", job.timestamp)
-                if grid_writer is not None:
-                    logger.warning("Grid writer is configured but target_points produced point predictions; skipping grid write.")
+            
+            for suffix, result_var in zip([None, 'vertical', 'residual'],[prediction_result.prediction, prediction_result.vertical_prediction, prediction_result.residual_prediction]):
+                if isinstance(result_var, (xr.DataArray, xr.Dataset)):
+                    output = self._prepare_grid_for_output(result_var, job.parameter, job.timestamp, suffix)
+                    if grid_writer is not None:
+                        grid_writer.write(output)
 
             if cv_result is not None and self.context.db is not None and hasattr(self.context.db, "store_cv_results"):
                 self.context.db.store_cv_results(cv_result.fold_results, timestamp=job.timestamp)

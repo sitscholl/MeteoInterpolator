@@ -10,6 +10,7 @@ from src.array.cache import CacheManager
 from src.domain.dem import DEM
 from src.domain.meteo_data import MeteoData
 from src.utils import localize_datetime_string
+from src.workflow import InterpolationWorkflow
 
 
 def _dem(data: xr.DataArray) -> DEM:
@@ -25,6 +26,25 @@ def test_localize_datetime_string_uses_configured_timezone():
 
     assert ts.tzinfo is not None
     assert str(ts.tzinfo) == "Europe/Rome"
+
+
+def test_prepare_grid_for_output_normalizes_suffix_and_renames_single_var_dataset():
+    data = xr.DataArray(
+        [[1.0]],
+        dims=("y", "x"),
+        coords={"y": [0.0], "x": [0.0]},
+        name="tair_2m",
+    ).to_dataset()
+
+    result = InterpolationWorkflow._prepare_grid_for_output(
+        data,
+        param="tair_2m",
+        interp_date=pd.Timestamp("2026-05-13", tz="Europe/Rome"),
+        suffix="__vertical__",
+    )
+
+    assert list(result.data_vars) == ["tair_2m_vertical"]
+    assert result.sizes["time"] == 1
 
 
 def test_build_jobs_is_single_parameter_and_end_exclusive():

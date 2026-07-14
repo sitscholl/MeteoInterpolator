@@ -195,7 +195,7 @@ class CrossValidator:
         job: InterpolationJob,
         distance_fields: DistanceField | xr.DataArray | None = None,
 
-    ) -> CrossValidationResult:
+    ) -> CrossValidationResult | None:
         if not self.enabled:
             return None
 
@@ -266,7 +266,7 @@ class CrossValidator:
                                 test_obs,
                                 distance_fields=fold_distances,
                                 lam_value=lam_value,
-                            ).iloc[0]
+                            ).prediction.iloc[0]
                         )
                         if "overall" in self.scopes:
                             rows.append(
@@ -327,3 +327,31 @@ class CrossValidator:
             select_by=self.select_by,
             select_scope=self.select_scope,
         )
+
+
+def cross_validate(
+    estimator: Interpolator,
+    job: InterpolationJob,
+    *,
+    distance_fields: DistanceField | xr.DataArray | None = None,
+    cv: str | Iterable[tuple[Sequence[int], Sequence[int]]] = "loo",
+    scoring: str | Sequence[str] = ("mae",),
+    scopes: Sequence[str] = ("overall",),
+    param_grid: dict[str, Sequence[Any]] | None = None,
+    refit_vertical_per_fold: bool = False,
+    select_by: str = "mae",
+    select_scope: str = "overall",
+    error_score: float | str = np.nan,
+) -> CrossValidationResult:
+    validator = CrossValidator(
+        enabled=True,
+        cv=cv,
+        scoring=scoring,
+        scopes=scopes,
+        param_grid=param_grid,
+        refit_vertical_per_fold=refit_vertical_per_fold,
+        select_by=select_by,
+        select_scope=select_scope,
+        error_score=error_score,
+    )
+    return validator.cross_validate(estimator, job, distance_fields=distance_fields)

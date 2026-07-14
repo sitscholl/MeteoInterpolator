@@ -7,6 +7,7 @@ import rioxarray  # noqa: F401
 from dataclasses import dataclass
 import logging
 from pyproj import CRS
+from typing import Literal
 
 from .vertical import BaseFittedVerticalModel, BaseVerticalModel
 from .distance import DistanceField
@@ -78,6 +79,33 @@ class FittedInterpolator:
     @property
     def timestamp(self) -> pd.Timestamp:
         return self.job.timestamp
+
+    @property
+    def residual_summary(self) -> dict[str, float | int]:
+        values = np.asarray(self.residuals.values, dtype=float)
+        return {
+            "n": int(values.size),
+            "mean": float(np.mean(values)),
+            "mae": float(np.mean(np.abs(values))),
+            "rmse": float(np.sqrt(np.mean(values**2))),
+            "min": float(np.min(values)),
+            "max": float(np.max(values)),
+        }
+
+@dataclass(frozen=True)
+class InterpolationPrediction:
+    prediction: xr.DataArray | pd.Series
+    vertical_prediction: xr.DataArray | pd.Series
+    residual_prediction: xr.DataArray | pd.Series | None
+    parameter: str
+    timestamp: pd.Timestamp
+    target_type: Literal["grid", "points"]
+    lam_value: float | int | None
+    station_ids: tuple[str, ...]
+
+    @property
+    def used_residuals(self) -> bool:
+        return self.residual_prediction is not None
 
 @dataclass
 class Interpolator:
@@ -253,7 +281,7 @@ class Interpolator:
         target_points: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame,
         distance_fields: DistanceField | xr.DataArray | None = None,
         lam_value: float | int | None = None,
-    ) -> xr.DataArray | pd.Series:
+    ) -> InterpolationPrediction:
         if isinstance(target_points, xr.DataArray):
             self._check_prediction_crs(model, target_points)
             return self._predict_grid(
@@ -272,9 +300,10 @@ class Interpolator:
         grid: xr.DataArray,
         distance_fields: DistanceField | xr.DataArray | None = None,
         lam_value: float | int | None = None,
-    ) -> xr.DataArray:
+    ) -> InterpolationPrediction:
         vertical_prediction = model.vertical_fit.predict(grid)
         prediction = vertical_prediction
+        residual_prediction = None
 
         if self.residual_model is not None and distance_fields is None:
             logger.warning("Residual model available but no distance fields provided. Residuals will not be interpolated.")
@@ -293,7 +322,20 @@ class Interpolator:
                 )
                 prediction = vertical_prediction + residual_prediction
 
-        return prediction.rename(model.parameter)
+        return InterpolationPrediction(
+            prediction=prediction.rename(model.parameter),
+            vertical_prediction=vertical_prediction.rename(f"{model.parameter}_vertical"),
+            residual_prediction=(
+                residual_prediction.rename(f"{model.parameter}_residual")
+                if residual_prediction is not None
+                else None
+            ),
+            parameter=model.parameter,
+            timestamp=model.timestamp,
+            target_type="grid",
+            lam_value=lam_value,
+            station_ids=tuple(model.job.observations["station_id"].astype(str)),
+        )
 
     def _predict_points(
         self,
@@ -301,11 +343,12 @@ class Interpolator:
         points: pd.DataFrame,
         distance_fields: DistanceField | xr.DataArray | None = None,
         lam_value: float | int | None = None,
-    ) -> pd.Series:
+    ) -> InterpolationPrediction:
 
         point_X, x_coords, y_coords, ids = self._point_frame_to_arrays(points)
         vertical_prediction = np.asarray(model.vertical_fit.predict(point_X), dtype=float).reshape(-1)
         prediction = vertical_prediction
+        residual_prediction = None
 
         if self.residual_model is not None and distance_fields is None:
             logger.warning("Residual model available but no point distance fields provided. Residuals will not be interpolated.")
@@ -326,8 +369,30 @@ class Interpolator:
                 residual_prediction = residual_prediction.sel(target_id=ids)
                 prediction = vertical_prediction + np.asarray(residual_prediction.values, dtype=float).reshape(-1)
 
-        return pd.Series(
-            prediction,
-            index=pd.Index(ids, name="station_id"),
-            name=model.parameter,
+        index = pd.Index(ids, name="station_id")
+        return InterpolationPrediction(
+            prediction=pd.Series(
+                prediction,
+                index=index,
+                name=model.parameter,
+            ),
+            vertical_prediction=pd.Series(
+                vertical_prediction,
+                index=index,
+                name=f"{model.parameter}_vertical",
+            ),
+            residual_prediction=(
+                pd.Series(
+                    np.asarray(residual_prediction.values, dtype=float).reshape(-1),
+                    index=index,
+                    name=f"{model.parameter}_residual",
+                )
+                if residual_prediction is not None
+                else None
+            ),
+            parameter=model.parameter,
+            timestamp=model.timestamp,
+            target_type="points",
+            lam_value=lam_value,
+            station_ids=tuple(model.job.observations["station_id"].astype(str)),
         )

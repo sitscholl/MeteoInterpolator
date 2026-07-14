@@ -13,7 +13,7 @@ from src.array.cache import CacheManager
 from src.domain.dem import DEM
 from src.interpolate.distance import DistanceField
 from src.interpolate.idw import InverseDistanceWeighting
-from src.interpolate.interpolator import InterpolationJob, Interpolator
+from src.interpolate.interpolator import InterpolationJob, InterpolationPrediction, Interpolator
 from src.interpolate.vertical import LinearVerticalFit, LinearVerticalModel
 
 
@@ -132,12 +132,18 @@ def test_interpolator_returns_result_and_adds_idw_residuals():
 
     assert fitted.timestamp == pd.Timestamp("2026-05-13")
     assert fitted.parameter == "tair_2m"
-    assert result.dims == ("y", "x")
-    xr.testing.assert_equal(result.x, target_grid.x)
-    xr.testing.assert_equal(result.y, target_grid.y)
-    assert float(result.sel(y=0.0, x=0.0)) == pytest.approx(0.0)
-    assert float(result.sel(y=0.0, x=1.0)) == pytest.approx(3.0)
-    assert float(result.sel(y=0.0, x=2.0)) == pytest.approx(2.0)
+    assert fitted.residual_summary["n"] == 3.0
+    assert isinstance(result, InterpolationPrediction)
+    assert result.used_residuals
+    assert result.target_type == "grid"
+    assert result.prediction.dims == ("y", "x")
+    assert result.vertical_prediction.dims == ("y", "x")
+    assert result.residual_prediction.dims == ("y", "x")
+    xr.testing.assert_equal(result.prediction.x, target_grid.x)
+    xr.testing.assert_equal(result.prediction.y, target_grid.y)
+    assert float(result.prediction.sel(y=0.0, x=0.0)) == pytest.approx(0.0)
+    assert float(result.prediction.sel(y=0.0, x=1.0)) == pytest.approx(3.0)
+    assert float(result.prediction.sel(y=0.0, x=2.0)) == pytest.approx(2.0)
 
 
 def test_interpolator_predicts_points_with_idw_residuals():
@@ -185,6 +191,11 @@ def test_interpolator_predicts_points_with_idw_residuals():
     fitted = interpolator.fit(job)
     result = interpolator.predict(fitted, observations, distance_fields=distances)
 
-    assert isinstance(result, pd.Series)
-    assert result.index.tolist() == ["a", "b", "c"]
-    assert result.tolist() == pytest.approx([0.0, 3.0, 2.0])
+    assert isinstance(result, InterpolationPrediction)
+    assert result.used_residuals
+    assert result.target_type == "points"
+    assert isinstance(result.prediction, pd.Series)
+    assert isinstance(result.vertical_prediction, pd.Series)
+    assert isinstance(result.residual_prediction, pd.Series)
+    assert result.prediction.index.tolist() == ["a", "b", "c"]
+    assert result.prediction.tolist() == pytest.approx([0.0, 3.0, 2.0])
