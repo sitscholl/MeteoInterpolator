@@ -114,6 +114,32 @@ class InterpolationWorkflow:
         points.attrs["crs"] = dem_crs
         return points
 
+    async def _load_meteo_data(
+        self, stations: str | list[str], start, end, sensor_codes: str | list[str]
+        ):
+        if isinstance(stations, str):
+            stations = [stations]      
+        if isinstance(sensor_codes, str):
+            sensor_codes = [sensor_codes]
+
+        async with self.context.meteo_loader as meteo_loader:
+            semaphore = asyncio.Semaphore(3)
+            async def load_station(st: str):
+                async with semaphore:
+                    return await meteo_loader.get_data(
+                        station_id = st, 
+                        start = start, 
+                        end = end, 
+                        sensor_codes = sensor_codes, 
+                        )
+            tasks = [asyncio.create_task(load_station(st)) for st in stations]
+            station_data = await asyncio.gather(*tasks)
+
+        meteo_data = MeteoData.from_list(station_data)
+        if meteo_data.n_stations == 0:
+            raise ValueError("Could not load data for any station.")
+        return meteo_data
+
     def prepare_distance_fields(self, jobs, meteo_data):
         distance_calculator = self.context.distance_calculator
         if distance_calculator is not None:
@@ -159,38 +185,10 @@ class InterpolationWorkflow:
             else prediction_target.attrs["crs"]
         )
 
-        if self.context.stations is None:
-            async with self.context.meteo_loader as meteo_loader:
-                stations = await meteo_loader.get_station_codes()
-        else:
-            stations = self.context.stations
-        
-        logger.info(f"Requesting data for {len(stations)} stations.")
-        async with self.context.meteo_loader as meteo_loader:
-            semaphore = asyncio.Semaphore(3)
-            async def load_station(st: str):
-                async with semaphore:
-                    return await meteo_loader.get_data(
-                        station_id = st, 
-                        start = start, 
-                        end = end, 
-                        sensor_codes = [param], 
-                        validator = self.context.meteo_validator
-                        )
-            tasks = [asyncio.create_task(load_station(st)) for st in stations]
-            station_data = await asyncio.gather(*tasks)
-
-        meteo_data = MeteoData.from_list(station_data)
-        if meteo_data.n_stations == 0:
-            raise ValueError("Could not load data for any station.")
+        logger.info(f"Requesting data for {len(self.context.stations)} stations.")
+        meteo_data = await self._load_meteo_data(self.context.stations, start, end, param)
         logger.info(f"Loaded data for {meteo_data.n_stations} stations.")
 
-        ## Filter stations that are inside DEM
-        meteo_data, n_dropped = meteo_data.filter_bbox(aoi = self.context.aoi)
-        if meteo_data.n_stations == 0:
-            raise ValueError("No stations are within supplied dem.")
-        if n_dropped > 0:
-            logger.warning(f"Dropped {n_dropped} stations outside dem")
         meteo_data = meteo_data.to_crs(target_crs)
 
         if meteo_data.n_stations < self.context.interpolator.min_sample_size:

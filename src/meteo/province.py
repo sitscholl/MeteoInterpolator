@@ -357,7 +357,6 @@ class ProvinceAPI(BaseMeteoHandler):
 if __name__ == '__main__':
     
     import logging
-    from ..validate.meteo import MeteoValidator
 
     logging.basicConfig(level = logging.DEBUG, force = True)
 
@@ -376,7 +375,6 @@ if __name__ == '__main__':
                 sensor_codes = ["LT", 'N', 'LF'],
                 start = start,
                 end = end,
-                validator = MeteoValidator()
             )
         print(data)
         return data

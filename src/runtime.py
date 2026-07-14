@@ -1,3 +1,7 @@
+import geopandas as gpd
+from shapely import Point
+from pyproj import CRS
+
 from pathlib import Path
 from dataclasses import dataclass
 import yaml
@@ -9,7 +13,6 @@ from .domain.dem import load_dem
 from .array.cache import CacheManager
 from .meteo.base import BaseMeteoHandler
 from .resample import MeteoResampler
-from .validate.meteo import MeteoValidator
 from .datagaps import Gapfiller
 from .interpolate import BaseDistanceCalculator
 from .interpolate import Interpolator
@@ -43,6 +46,35 @@ class RuntimeContext:
             raise ValueError("RuntimeContext requires a config dictionary")
         self.initialize_runtime(self.config)
 
+    async def _prepare_interpolation_stations(
+        self, configured_stations: str | list[str] | None, aoi: AOI, crs = CRS
+        ):
+        async with self.meteo_loader as meteo_loader:
+            all_stations = await meteo_loader.get_station_codes()
+
+        if configured_stations is None:
+            stations = all_stations
+        else:
+            if isinstance(configured_stations, str):
+                configured_stations = [configured_stations]
+            stations = {st: info for st, info in stations.items() if st in configured_stations}
+
+        station_gdf = gpd.GeoDataFrame(list(stations.values()), crs = 4326)
+        station_gdf = station_gdf.set_geometry([Point(x, y) for x, y in zip(station_gdf['x'], station_gdf['y'])])
+        station_gdf = station_gdf.to_crs(crs)
+        station_gdf.rename(columns = {'id': 'station_id'}, inplace = True)
+
+        stations_in_dem = aoi.filter_bbox(station_gdf)
+
+        if len(stations_in_dem) == 0:
+            raise ValueError("No stations are within supplied dem.")
+
+        dropped_stations = [i for i in station_gdf['station_id'].unique() if i not in stations_in_dem['station_id'].unique()]
+        if len(dropped_stations) > 0 and configured_stations is not None:
+            logger.warning(f"The following stations are ignored because they are outside the provided dem: {dropped_stations}")
+        
+        return stations_in_dem
+
     def initialize_runtime(self, config: dict):
 
         ## General
@@ -63,26 +95,22 @@ class RuntimeContext:
         self.aoi = AOI.from_array(self.dem.data)
         logger.info(f'Initialized aoi with bounds {self.aoi.bounds}')
 
-        ## Meteo Data
+        ## Meteo Loader
         meteo_data_config = dict(config['meteo_data'])
-        stations = meteo_data_config.get('stations')
-        if stations is None:
-            self.stations = None
-        elif isinstance(stations, (list, tuple)):
-            self.stations = list(stations)
-        else:
-            self.stations = [stations]
-
         handler_name = meteo_data_config.pop('handler')
         self.meteo_loader = BaseMeteoHandler.create(handler_name, target_timezone = self.timezone, **meteo_data_config)
         logger.info(f'Initialized {handler_name} meteo loader')
 
+        ## Stations
+        configured_stations = meteo_data_config.get('stations')
+        self.stations = self._prepare_interpolation_stations(
+            configured_stations, aoi = self.aoi, crs = CRS.from_user_input(self.dem.rio.crs)
+            )
+        logger.info("Initialized %s stations inside dem for interpolation", len(self.stations))
+
         ## Meteo resampler
         resampler_config = config.get('resampling', {})
         self.resampler = MeteoResampler(**resampler_config)
-
-        ## Meteo Validator
-        self.meteo_validator = MeteoValidator(timezone = self.timezone)
 
         ## Gapfiller
         gapfiller_config = config.get('gapfilling')
