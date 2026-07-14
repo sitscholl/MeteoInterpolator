@@ -9,7 +9,7 @@ meteo_data:
 
 dem:
   #path: "https://files.isimip.org/ISIMIP3a/InputData/climate/atmosphere/obsclim/global/daily/historical/CHELSA-W5E5/chelsa-w5e5_obsclim_orog_30arcsec_global.nc#mode=bytes"
-  path: data/dem_envelope_100m.tif
+  path: data/dem_envelope_1000m.tif
   var: null
   crs: null
 
@@ -44,7 +44,6 @@ cross_validation:
   refit_vertical_per_fold: false
   select_by: mae
   select_scope: overall
-  apply_best_params: true
   param_grid:
     lambda: [0, 25, 50, 75, 100, 150, 200]
 
