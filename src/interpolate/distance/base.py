@@ -6,7 +6,7 @@ import logging
 import numpy as np
 import xarray as xr
 
-from ...array.dem import DEM
+from ...domain.dem import DEM
 from ...array.cache import CacheManager
 
 logger = logging.getLogger(__name__)

@@ -6,8 +6,8 @@ from dataclasses import dataclass
 
 import logging
 
-from .cache import CacheManager
-from .crs import load_crs_metadata
+from ..array.cache import CacheManager
+from ..array.crs import load_crs_metadata
 
 logger = logging.getLogger(__name__)
 

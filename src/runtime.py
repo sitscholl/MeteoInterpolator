@@ -5,7 +5,7 @@ import yaml
 import logging
 
 from .aoi import AOI
-from .array.dem import load_dem
+from .domain.dem import load_dem
 from .array.cache import CacheManager
 from .meteo.base import BaseMeteoHandler
 from .resample import MeteoResampler
@@ -108,10 +108,7 @@ class RuntimeContext:
             )
 
         ## Interpolator
-        self.interpolator = Interpolator.from_config(
-            dem = self.dem,
-            config = interpolation_config,
-        )
+        self.interpolator = Interpolator.from_config(interpolation_config)
 
         cv_config = config.get("cross_validation")
         if cv_config is None or not cv_config.get("enabled", False):

@@ -8,7 +8,7 @@ from scipy.sparse.csgraph import dijkstra
 
 import logging
 
-from ...array.dem import DEM
+from ...domain.dem import DEM
 from ...array.cache import CacheManager
 from .base import BaseDistanceCalculator, DistanceField
 
