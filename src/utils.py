@@ -1,5 +1,6 @@
 import datetime
 import pandas as pd
+from pandas.tseries.frequencies import to_offset
 
 import logging
 
@@ -75,3 +76,26 @@ def localize_datetime_string(value: str, timezone: str):
             )
         ts = converted
     return ts
+
+def get_date_format_from_freq(freq: str, filename_safe: bool = False) -> str:
+    if freq is None or str(freq).strip() == "":
+        raise ValueError("Frequency must be a non-empty string.")
+
+    try:
+        offset = to_offset(freq)
+    except ValueError as exc:
+        raise ValueError(f"Invalid frequency {freq!r}.") from exc
+
+    try:
+        delta = pd.Timedelta(offset)
+    except (TypeError, ValueError):
+        try:
+            delta = pd.Timedelta(offset.nanos, unit="ns")
+        except (AttributeError, TypeError, ValueError):
+            delta = None
+
+    if delta is None or delta >= pd.Timedelta(days=1):
+        return "%Y-%m-%d"
+    if delta >= pd.Timedelta(minutes=1):
+        return "%Y-%m-%d_%H-%M" if filename_safe else "%Y-%m-%d %H:%M"
+    return "%Y-%m-%d_%H-%M-%S" if filename_safe else "%Y-%m-%d %H:%M:%S"

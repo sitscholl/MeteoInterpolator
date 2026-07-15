@@ -158,7 +158,8 @@ class RuntimeContext:
         else:
             output_format = output_config['format']
             self.grid_writer = GridWriter.create(output_format, **output_config.get('options', {}))
-            logger.info(f"Initialized grid writer with output format {output_format} pointing to {self.grid_writer.path}")
+            output_target = getattr(self.grid_writer, "root", getattr(self.grid_writer, "path", None))
+            logger.info(f"Initialized grid writer with output format {output_format} pointing to {output_target}")
 
         ## Database
         db_config = config.get('database')

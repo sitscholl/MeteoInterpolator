@@ -64,4 +64,8 @@ cross_validation:
 output:
   format: tiff
   options:
-    path: data/results
+    root: data/results
+    # filename_pattern supports {var}, {variable}, {date}, {param}, and {suffix}
+    filename_pattern: "{date}_{var}"
+    # date_format defaults from resampling.target_freq, e.g. "%Y-%m-%d" for daily output.
+    # date_format: "%Y%m%d"

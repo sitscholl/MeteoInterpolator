@@ -64,7 +64,7 @@ class InterpolationJob:
         return y, X, x_coords, y_coords, ids
 
     def __repr__(self):
-        return f"InterpolationJob (date: {self.timestamp}, parameter: {self.parameter}, samples: {len(self.observations)})"
+        return f"InterpolationJob (date: {self.timestamp:%Y-%m-%d %H:%M}, parameter: {self.parameter}, samples: {len(self.observations)})"
 
 @dataclass(frozen=True)
 class FittedInterpolator:

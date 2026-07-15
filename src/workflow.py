@@ -11,6 +11,8 @@ import logging
 
 from .runtime import RuntimeContext
 from .domain.meteo_data import MeteoData
+from .utils import get_date_format_from_freq
+from .array.writer import GridWriter
 
 logger = logging.getLogger(__name__)
 
@@ -34,37 +36,6 @@ class InterpolationWorkflow:
         if start.tzinfo != end.tzinfo:
             raise ValueError(f"start and end date must have the same timezone. Got {start.tzinfo} vs {end.tzinfo}")
         
-    @staticmethod
-    def _output_var_name(param: str, suffix: str | None = None) -> str:
-        parts = [str(param).strip()]
-        if suffix is not None:
-            parts.append(str(suffix).strip().strip("_"))
-        return "_".join(part for part in parts if part)
-
-    @classmethod
-    def _prepare_grid_for_output(cls, interpolated_grid: xr.DataArray | xr.Dataset, param: str, interp_date, suffix: str | None = None):
-        new_name = cls._output_var_name(param, suffix)
-        if isinstance(interpolated_grid, xr.Dataset):
-            data = interpolated_grid
-            data_vars = list(data.data_vars)
-            if len(data_vars) == 1 and data_vars[0] != new_name:
-                old_name = next(iter(data.data_vars))
-                data = data.rename({old_name: new_name})
-            elif param in data.data_vars and param != new_name:
-                if new_name in data.data_vars:
-                    raise ValueError(f"Cannot rename output variable {param!r} to existing variable {new_name!r}.")
-                data = data.rename({param: new_name})
-        elif isinstance(interpolated_grid, xr.DataArray):
-            data = interpolated_grid.rename(new_name)
-        else:
-            raise TypeError(f"Interpolated grid must be an xarray DataArray or Dataset. Got {type(interpolated_grid)}")
-
-        if 'time' not in data.dims:
-            data = data.expand_dims(time=[pd.Timestamp(interp_date)])
-        else:
-            data = data.assign_coords(time=[pd.Timestamp(interp_date)])
-        return data
-
     def _prepare_target_points(
         self,
         target_points: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame | None,
@@ -235,6 +206,7 @@ class InterpolationWorkflow:
             datetime_col = 'datetime',
             groupby_cols = ['station_id']
         )
+        datefmt = get_date_format_from_freq(target_freq)
 
         ## Use DEM-derived station elevations for consistency with target elevation values.
         meteo_data = meteo_data.update_elevation(self.context.dem, overwrite=True)
@@ -250,11 +222,11 @@ class InterpolationWorkflow:
         run_distance_fields = self.prepare_distance_fields(jobs, meteo_data)
 
         ## Interpolate
-        logger.info(f"Interpolating parameter {param} over period {start} - {end} with frequency {target_freq}")
+        logger.info(f"Interpolating parameter {param} over period {start.strftime(datefmt)} - {end.strftime(datefmt)} with frequency {target_freq}")
         results = []
         for job in jobs:
 
-            logger.info('Starting interpolation job %s', job)
+            logger.info('Starting %s', job)
 
             if len(job.observations) < self.context.interpolator.min_sample_size:
                 logger.warning(
@@ -292,7 +264,7 @@ class InterpolationWorkflow:
             
             for suffix, result_var in zip([None, 'vertical', 'residual'],[prediction_result.prediction, prediction_result.vertical_prediction, prediction_result.residual_prediction]):
                 if isinstance(result_var, (xr.DataArray, xr.Dataset)):
-                    output = self._prepare_grid_for_output(result_var, job.parameter, job.timestamp, suffix)
+                    output = GridWriter.prepare_grid_for_output(result_var, job.parameter, job.timestamp, suffix)
                     if grid_writer is not None:
                         grid_writer.write(output)
 

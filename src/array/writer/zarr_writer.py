@@ -482,7 +482,15 @@ class ZarrWriter(GridWriter):
 
         logger.debug(f"New zarr store created at {self.path}")
 
-    def write(self, data: xr.Dataset | xr.DataArray, overwrite: bool = False):
+    def write(
+        self,
+        data: xr.Dataset | xr.DataArray,
+        overwrite: bool = False,
+        *,
+        param: str | None = None,
+        timestamp=None,
+        suffix: str | None = None,
+    ):
         """
         Writes data into an existing Zarr store.
         Inserting of new variables to an existing store is currently not supported and will raise an error.
@@ -501,6 +509,11 @@ class ZarrWriter(GridWriter):
         """
 
         self._require_initialized()
+
+        if param is not None or timestamp is not None or suffix is not None:
+            if param is None or timestamp is None:
+                raise ValueError("param and timestamp are required when preparing Zarr output in write().")
+            data = self.prepare_grid_for_output(data, param, timestamp, suffix)
 
         if self.variables is None:
             raise ValueError('Variables in ZarrSpec not specified. Cannot write to zarr store.')
