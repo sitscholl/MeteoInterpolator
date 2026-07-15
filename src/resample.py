@@ -1,6 +1,7 @@
 import pandas as pd
 
 import logging
+import math
 from typing import Callable, Any, Iterable
 
 from .domain.meteo_data import MeteoData
@@ -30,13 +31,43 @@ class MeteoResampler:
     def __init__(
         self,
         resample_colmap: dict[str, str | Callable | list[str | Callable] | tuple[str | Callable, ...]] | None = None,
-        default_aggfunc: str | Callable = 'mean'
+        default_aggfunc: str | Callable = 'mean',
+        target_freq: str = "D",
+        min_coverage: float = 0.4,
     ):
 
         self.resample_colmap = (
             resample_colmap.copy() if resample_colmap is not None else DEFAULT_RESAMPLE_COLMAP.copy()
         )
         self.default_aggfunc = default_aggfunc
+        self.target_freq = target_freq
+        self.min_coverage = min_coverage
+
+        if not 0 < self.min_coverage <= 1:
+            raise ValueError(f"min_coverage must be > 0 and <= 1. Got {self.min_coverage}")
+
+    @staticmethod
+    def _to_offset(freq: str):
+        return pd.tseries.frequencies.to_offset(freq)
+
+    @classmethod
+    def frequencies_equal(cls, left: str, right: str) -> bool:
+        return cls._to_offset(left) == cls._to_offset(right)
+
+    def min_samples_for_coverage(self, source_freq: str, target_freq: str | None = None) -> int:
+        target_freq = target_freq or self.target_freq
+        source_offset = self._to_offset(source_freq)
+        target_offset = self._to_offset(target_freq)
+
+        try:
+            expected_samples = target_offset.nanos / source_offset.nanos
+        except ValueError as exc:
+            raise ValueError(
+                "min_coverage requires fixed source and target frequencies. "
+                f"Got source_freq={source_freq!r}, target_freq={target_freq!r}."
+            ) from exc
+
+        return max(1, math.ceil(expected_samples * self.min_coverage))
 
     def _resolve_aggfunc(self, aggfunc: str | Callable):
         if callable(aggfunc):
@@ -158,10 +189,11 @@ class MeteoResampler:
     def resample_meteo_data(
         self,
         meteo_data: MeteoData,
-        freq: str,
+        freq: str | None = None,
         datetime_col: str = "datetime",
         groupby_cols: list[str] | None = None,
-        min_sample_size: int = 1,
+        min_sample_size: int | None = None,
+        source_freq: str | None = None,
     ) -> MeteoData:
 
         if not isinstance(meteo_data, MeteoData):
@@ -170,9 +202,21 @@ class MeteoResampler:
         if meteo_data.n_stations == 0:
             return meteo_data
 
+        target_freq = freq or self.target_freq
+        if source_freq is not None and self.frequencies_equal(source_freq, target_freq):
+            logger.info("Skipping meteo resampling because source frequency %s already matches target frequency %s", source_freq, target_freq)
+            return meteo_data
+
+        if min_sample_size is None:
+            min_sample_size = (
+                self.min_samples_for_coverage(source_freq, target_freq)
+                if source_freq is not None
+                else 1
+            )
+
         resampled = self.apply_resampling(
             meteo_data.observations,
-            freq=freq,
+            freq=target_freq,
             datetime_col=datetime_col,
             groupby_cols=groupby_cols,
             min_sample_size=min_sample_size,

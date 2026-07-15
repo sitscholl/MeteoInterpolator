@@ -10,6 +10,10 @@ meteo_data:
   station_metadata_path: data/province/stations.csv
   observations_path: data/province/station_files/*.csv
 
+resampling:
+  target_freq: D
+  min_coverage: 0.4
+
 dem:
   #path: "https://files.isimip.org/ISIMIP3a/InputData/climate/atmosphere/obsclim/global/daily/historical/CHELSA-W5E5/chelsa-w5e5_obsclim_orog_30arcsec_global.nc#mode=bytes"
   path: data/dem_envelope_1000m.tif

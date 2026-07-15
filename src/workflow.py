@@ -14,10 +14,6 @@ from .domain.meteo_data import MeteoData
 
 logger = logging.getLogger(__name__)
 
-##Fixed parameters for now, make configurable later
-_FREQ = 'D'
-_MIN_SAMPLE_SIZE = 60
-
 class InterpolationWorkflow:
 
     def __init__(self, runtime_context: RuntimeContext, target_points: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame | None = None):
@@ -231,10 +227,11 @@ class InterpolationWorkflow:
         if self.context.gapfiller is not None:
             meteo_data = self.context.gapfiller.fill_gaps(meteo_data)
 
+        target_freq = self.context.resampler.target_freq
         meteo_data = self.context.resampler.resample_meteo_data(
             meteo_data,
-            freq=_FREQ,
-            min_sample_size=_MIN_SAMPLE_SIZE,
+            freq=target_freq,
+            source_freq=self.context.meteo_loader.freq,
             datetime_col = 'datetime',
             groupby_cols = ['station_id']
         )
@@ -243,7 +240,7 @@ class InterpolationWorkflow:
         meteo_data = meteo_data.update_elevation(self.context.dem, overwrite=True)
 
         grid_writer = (
-            self.context.grid_writer.initialize(param=param, start=start, end=end, freq=_FREQ)
+            self.context.grid_writer.initialize(param=param, start=start, end=end, freq=target_freq)
             if self.context.grid_writer is not None
             else None
         )
@@ -253,7 +250,7 @@ class InterpolationWorkflow:
         run_distance_fields = self.prepare_distance_fields(jobs, meteo_data)
 
         ## Interpolate
-        logger.info(f"Interpolating parameter {param} over period {start} - {end} with frequency {_FREQ}")
+        logger.info(f"Interpolating parameter {param} over period {start} - {end} with frequency {target_freq}")
         results = []
         for job in jobs:
 
