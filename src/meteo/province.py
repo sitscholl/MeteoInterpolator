@@ -51,12 +51,12 @@ class ProvinceAPI(BaseMeteoHandler):
         self._client = None
 
     async def __aenter__(self):
-        logger.info("Opening ProvinceAPI session...")
+        logger.debug("Opening ProvinceAPI session...")
         self._client = httpx.AsyncClient()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        logger.info("Closing ProvinceAPI session...")
+        logger.debug("Closing ProvinceAPI session...")
         if self._client is not None:
             await self._client.aclose()
 
@@ -104,6 +104,46 @@ class ProvinceAPI(BaseMeteoHandler):
             self.station_sensors[station_code] = sensors_list
 
             return sensors_list
+
+    def _extract_stations_per_param(
+        self,
+        sensor_catalogue: list[dict[str, Any]],
+        sensors: list[str],
+    ) -> dict[str, list[str]]:
+        if isinstance(sensors, str):
+            sensors = [sensors]
+
+        result_dict: dict[str, list[str]] = {i: [] for i in sensors}
+        seen: dict[str, set[str]] = {i: set() for i in sensors}
+        requested_sensors = set(sensors)
+        for entry in sensor_catalogue:
+            entry_sensor = entry.get('TYPE')
+            station_code = entry.get('SCODE')
+            if entry_sensor in requested_sensors and station_code is not None:
+                station_code = str(station_code)
+                if station_code not in seen[entry_sensor]:
+                    result_dict[entry_sensor].append(station_code)
+                    seen[entry_sensor].add(station_code)
+        return result_dict
+
+    async def get_stations_for_sensors(self, sensors: str | list[str]) -> dict[str, list[str]]:
+        sensors = self._normalize_sensor_codes(sensors)
+        provider_codes = SENSORS.resolve_provider_codes(self.provider_name, sensors)
+        rename_map = dict(zip(provider_codes, sensors))
+        sensors_provider = list(rename_map.keys())
+
+        if self._client is None:
+            raise ValueError("Initialize client before querying stations per sensors")
+
+        response = await self._client.get(
+                    self.sensors_url, timeout=self.timeout
+                )
+        response.raise_for_status()
+
+        sensor_catalogue = response.json()
+        selected_stations = self._extract_stations_per_param(sensor_catalogue, sensors_provider)
+
+        return {rename_map[i]: j for i,j in selected_stations.items()}
 
     async def get_station_codes(self):
         if self.station_info is not None:

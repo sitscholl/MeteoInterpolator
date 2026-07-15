@@ -3,9 +3,9 @@ general:
 
 meteo_data:
   handler: province_api
-  stations: ['02500MS', '09700MS', '15800MS', '19300MS', '23200MS', '25900MS', '34500MS', '37100MS', '39100MS',
-              '41000MS', '44500MS', '50500MS', '56900MS', '59700MS', '65600MS', '66500MS', '73500MS',
-              '74900MS', '75600MS', '82200MS', '83200MS', '85120MS', '86900MS', '88820MS']
+  # stations: ['02500MS', '09700MS', '15800MS', '19300MS', '23200MS', '25900MS', '34500MS', '37100MS', '39100MS',
+  #             '41000MS', '44500MS', '50500MS', '56900MS', '59700MS', '65600MS', '66500MS', '73500MS',
+  #             '74900MS', '75600MS', '82200MS', '83200MS', '85120MS', '86900MS', '88820MS']
 
 dem:
   #path: "https://files.isimip.org/ISIMIP3a/InputData/climate/atmosphere/obsclim/global/daily/historical/CHELSA-W5E5/chelsa-w5e5_obsclim_orog_30arcsec_global.nc#mode=bytes"
@@ -46,6 +46,7 @@ cross_validation:
   select_scope: overall
   param_grid:
     lambda: [0, 25, 50, 75, 100, 150, 200]
+    #lambda: [100]
 
 cache:
   enabled: true

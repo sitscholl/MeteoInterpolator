@@ -108,6 +108,20 @@ class BaseMeteoHandler(ABC):
         pass
 
     @abstractmethod
+    async def get_stations_for_sensors(self, sensors: str | list[str]) -> Dict[str, list[str]]:
+        """
+        Query station ids that expose the requested sensor code(s).
+
+        Args:
+            sensors: A sensor code or list of sensor codes, using either provider
+                codes or harmonized names supported by the handler.
+
+        Returns:
+            dict: A mapping from requested sensor code to station ids.
+        """
+        pass
+
+    @abstractmethod
     async def get_raw_data(self, **kwargs) -> pd.DataFrame:
         """
         Query the raw data from the source.

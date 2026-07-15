@@ -26,6 +26,8 @@ class InterpolationWorkflow:
         self.context = runtime_context
         self.target_points = target_points
 
+        self._sensor_catalogue = {}
+
         logger.info("Initialized InterpolationWorkflow")
 
     def _validate_dates(self, start: datetime, end: datetime):
@@ -126,6 +128,10 @@ class InterpolationWorkflow:
         points.attrs["crs"] = dem_crs
         return points
 
+    def _check_station_sample_size(self, n_stations: int):
+        if n_stations < self.context.interpolator.min_sample_size:
+            raise ValueError(f"Only {n_stations} available, interpolation requires {self.context.interpolator.min_sample_size}")
+
     async def _load_meteo_data(
         self, stations: str | list[str], start, end, sensor_codes: str | list[str]
         ):
@@ -134,7 +140,25 @@ class InterpolationWorkflow:
         if isinstance(sensor_codes, str):
             sensor_codes = [sensor_codes]
 
+        requested_stations = set(stations)
+        uncached_sensors = [i for i in sensor_codes if i not in self._sensor_catalogue.keys()]
+
         async with self.context.meteo_loader as meteo_loader:
+
+            if len(uncached_sensors) > 0:
+                new_catalogue_entries = await meteo_loader.get_stations_for_sensors(uncached_sensors)
+                if len(new_catalogue_entries) > 0:
+                    self._sensor_catalogue.update(new_catalogue_entries)
+
+            stations_with_sensors = {st for sn, i in self._sensor_catalogue.items() for st in i if sn in sensor_codes}
+
+            valid_stations = sorted(stations_with_sensors.intersection(requested_stations))
+            if len(valid_stations) == 0:
+                raise ValueError(f"Found no stations for sensors {sensor_codes} within the {len(requested_stations)} requested stations.")
+            self._check_station_sample_size(len(valid_stations))
+
+            logger.info(f"Requesting data for {len(valid_stations)} stations.")
+        
             semaphore = asyncio.Semaphore(3)
             async def load_station(st: str):
                 async with semaphore:
@@ -144,12 +168,16 @@ class InterpolationWorkflow:
                         end = end, 
                         sensor_codes = sensor_codes, 
                         )
-            tasks = [asyncio.create_task(load_station(st)) for st in stations]
+            tasks = [asyncio.create_task(load_station(st)) for st in valid_stations]
             station_data = await asyncio.gather(*tasks)
 
         meteo_data = MeteoData.from_list(station_data)
+
         if meteo_data.n_stations == 0:
             raise ValueError("Could not load data for any station.")
+        self._check_station_sample_size(meteo_data.n_stations)
+        logger.info(f"Loaded data for {meteo_data.n_stations} stations.")
+
         return meteo_data
 
     def prepare_distance_fields(self, jobs, meteo_data):
@@ -197,15 +225,9 @@ class InterpolationWorkflow:
             else prediction_target.attrs["crs"]
         )
 
-        logger.info(f"Requesting data for {len(self.context.station_ids)} stations.")
         meteo_data = await self._load_meteo_data(self.context.station_ids, start, end, param)
-        logger.info(f"Loaded data for {meteo_data.n_stations} stations.")
-
         meteo_data = meteo_data.to_crs(target_crs)
-
-        if meteo_data.n_stations < self.context.interpolator.min_sample_size:
-            raise ValueError(f"Only {meteo_data.n_stations} available, interpolation requires {self.context.interpolator.min_sample_size}")
-
+        
         if self.context.gapfiller is not None:
             meteo_data = self.context.gapfiller.fill_gaps(meteo_data)
 
