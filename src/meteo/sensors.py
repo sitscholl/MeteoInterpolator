@@ -15,12 +15,19 @@ PROVIDER_SENSOR_MAPS: Dict[str, Dict[str, str]] = {
         "HS": "snow_height",
         "W": "water_level",
         "Q": "discharge",
+    },
+    "local_file": {
+        "tmean": "tair_2m",
+        "insol": "solar_radiation"
     }
 }
 
 PROVIDER_COLUMN_RENAMES: Dict[str, Dict[str, str]] = {
     "province_api": {
         "DATE": "datetime",
+    },
+    "local_file": {
+        "date": "datetime"
     }
 }
 

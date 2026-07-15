@@ -16,11 +16,28 @@ def station_data_schema(timezone: str | None = None) -> pa.DataFrameSchema:
         error="datetime must be timezone-aware",
     )
     dtype = f"datetime64[ns, {timezone}]" if timezone is not None else None
+    sensor_columns = [
+        "tair_2m",
+        "relative_humidity",
+        "precipitation",
+        "wind_speed",
+        "wind_direction",
+        "wind_gust",
+        "air_pressure",
+        "sun_duration",
+        "solar_radiation",
+        "snow_height",
+        "water_level",
+        "discharge",
+    ]
     return pa.DataFrameSchema(
         {
             "datetime": pa.Column(dtype, checks=checks, coerce=timezone is not None),
             "station_id": pa.Column(str, coerce=True),
-            "tair_2m": pa.Column(float, nullable=True, required=True, coerce=True),
+            **{
+                sensor: pa.Column(float, nullable=True, required=False, coerce=True)
+                for sensor in sensor_columns
+            },
         },
         index = pa.Index(int),
         unique = ['datetime', 'station_id'],

@@ -320,8 +320,8 @@ if __name__ == '__main__':
     async def test_workflow():
         runtime = await RuntimeContext.from_config_file('config.example.yaml')
         workflow = InterpolationWorkflow(runtime)
-        start = pd.Timestamp("2026-01-25", tz=runtime.timezone)
-        end = pd.Timestamp("2026-01-30", tz=runtime.timezone)
+        start = pd.Timestamp("2021-12-01", tz=runtime.timezone)
+        end = pd.Timestamp("2021-12-10", tz=runtime.timezone)
         await workflow.run(param='tair_2m', start=start, end=end)
 
     logger.info("="*50)
