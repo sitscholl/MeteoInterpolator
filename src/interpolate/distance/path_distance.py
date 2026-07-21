@@ -171,6 +171,7 @@ class PathDistanceCalculator(BaseDistanceCalculator):
         vertical_parts = []
 
         for row_offset in range(max_row_offset + 1):
+            logger.debug("Processing row %s of %s", row_offset, max_row_offset)
             for col_offset in range(-max_col_offset, max_col_offset + 1):
                 if row_offset == 0 and col_offset <= 0:
                     continue
