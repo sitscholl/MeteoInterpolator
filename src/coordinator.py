@@ -1,0 +1,473 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+from dataclasses import dataclass, field
+from datetime import datetime
+from functools import partial
+from typing import Literal
+from uuid import uuid4
+
+import geopandas as gpd
+import pandas as pd
+import rioxarray  # noqa: F401
+import xarray as xr
+from pyproj import CRS
+
+from .array.writer import GridWriter
+from .domain.meteo_data import MeteoData
+from .execute.base import JobExecutor
+from .execute.serial import SerialExecutor
+from .interpolate import DistanceField, InterpolationJob
+from .runtime import RuntimeContext
+from .utils import get_date_format_from_freq
+from .worker import InterpolationJobResult, process_interpolation_job
+
+logger = logging.getLogger(__name__)
+
+
+RunStatus = Literal["queued", "running", "completed", "failed"]
+
+
+@dataclass(frozen=True)
+class InterpolationRequest:
+    param: str
+    start: datetime
+    end: datetime
+    target_points: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame | None = None
+
+
+@dataclass(frozen=True)
+class InterpolationSubmission:
+    request_id: str
+    status: RunStatus
+
+
+@dataclass(frozen=True)
+class InterpolationRunResult:
+    request_id: str
+    request: InterpolationRequest
+    job_results: list[InterpolationJobResult]
+    outputs: list[xr.Dataset | xr.DataArray] = field(default_factory=list)
+
+    @property
+    def status(self) -> RunStatus:
+        return "completed" if any(result.status == "completed" for result in self.job_results) else "failed"
+
+
+@dataclass(frozen=True)
+class InterpolationRunState:
+    request_id: str
+    request: InterpolationRequest
+    status: RunStatus
+    submitted_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    n_jobs: int | None = None
+    n_completed: int | None = None
+    n_skipped: int | None = None
+    n_failed: int | None = None
+    n_outputs: int | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class PreparedInterpolationRun:
+    request: InterpolationRequest
+    prediction_target: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame
+    jobs: list[InterpolationJob]
+    distance_fields: DistanceField | xr.DataArray | None
+    grid_writer: GridWriter | None
+    target_freq: str
+
+
+@dataclass
+class InterpolationCoordinator:
+    context: RuntimeContext
+    executor: JobExecutor = field(default_factory=SerialExecutor)
+    target_points: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame | None = None
+
+    def __post_init__(self) -> None:
+        self._sensor_catalogue: dict[str, list[str]] = {}
+        self._sensor_catalogue_lock = asyncio.Lock()
+        self._runs: dict[str, InterpolationRunState] = {}
+        self._tasks: dict[str, asyncio.Task] = {}
+
+    async def run(
+        self,
+        request: InterpolationRequest,
+        *,
+        request_id: str | None = None,
+    ) -> InterpolationRunResult:
+        request_id = request_id or str(uuid4())
+        prepared = await self._prepare_request(request)
+        job_results = self._submit_jobs(prepared)
+
+        outputs: list[xr.Dataset | xr.DataArray] = []
+        for job_result in job_results:
+            outputs.extend(self._finalize_job(job_result, prepared.grid_writer))
+
+        if not any(result.status == "completed" for result in job_results):
+            raise ValueError(
+                "No interpolation results were produced for parameter "
+                f"{request.param} over period {request.start} - {request.end}."
+            )
+
+        return InterpolationRunResult(
+            request_id=request_id,
+            request=request,
+            job_results=job_results,
+            outputs=outputs,
+        )
+
+    async def submit(self, request: InterpolationRequest) -> InterpolationSubmission:
+        request_id = str(uuid4())
+        self._runs[request_id] = InterpolationRunState(
+            request_id=request_id,
+            request=request,
+            status="queued",
+            submitted_at=datetime.now(),
+        )
+        self._tasks[request_id] = asyncio.create_task(
+            self._run_submitted(request_id, request)
+        )
+        return InterpolationSubmission(request_id=request_id, status="queued")
+
+    def get_status(self, request_id: str) -> InterpolationRunState:
+        try:
+            return self._runs[request_id]
+        except KeyError as exc:
+            raise KeyError(f"Unknown interpolation request_id: {request_id}") from exc
+
+    async def _run_submitted(self, request_id: str, request: InterpolationRequest) -> None:
+        self._runs[request_id] = self._replace_run_state(
+            request_id,
+            status="running",
+            started_at=datetime.now(),
+        )
+        try:
+            result = await self.run(request, request_id=request_id)
+        except Exception as exc:
+            logger.exception("Interpolation request %s failed", request_id)
+            self._runs[request_id] = self._replace_run_state(
+                request_id,
+                status="failed",
+                finished_at=datetime.now(),
+                error=str(exc),
+            )
+            return
+
+        self._runs[request_id] = self._replace_run_state(
+            request_id,
+            status=result.status,
+            finished_at=datetime.now(),
+            n_jobs=len(result.job_results),
+            n_completed=sum(1 for job_result in result.job_results if job_result.status == "completed"),
+            n_skipped=sum(1 for job_result in result.job_results if job_result.status == "skipped"),
+            n_failed=sum(1 for job_result in result.job_results if job_result.status == "failed"),
+            n_outputs=len(result.outputs),
+        )
+
+    def _replace_run_state(self, request_id: str, **changes) -> InterpolationRunState:
+        current = self.get_status(request_id)
+        values = {
+            "request_id": current.request_id,
+            "request": current.request,
+            "status": current.status,
+            "submitted_at": current.submitted_at,
+            "started_at": current.started_at,
+            "finished_at": current.finished_at,
+            "n_jobs": current.n_jobs,
+            "n_completed": current.n_completed,
+            "n_skipped": current.n_skipped,
+            "n_failed": current.n_failed,
+            "n_outputs": current.n_outputs,
+            "error": current.error,
+        }
+        values.update(changes)
+        return InterpolationRunState(**values)
+
+    async def _prepare_request(self, request: InterpolationRequest) -> PreparedInterpolationRun:
+        self._validate_dates(request.start, request.end)
+        prediction_target = self._prepare_target_points(
+            request.target_points if request.target_points is not None else self.target_points
+        )
+        target_crs = (
+            prediction_target.rio.crs
+            if isinstance(prediction_target, xr.DataArray)
+            else prediction_target.attrs["crs"]
+        )
+
+        meteo_data = await self._load_meteo_data(
+            self.context.station_ids,
+            request.start,
+            request.end,
+            request.param,
+        )
+        meteo_data = meteo_data.to_crs(target_crs)
+
+        if self.context.gapfiller is not None:
+            meteo_data = self.context.gapfiller.fill_gaps(meteo_data)
+
+        target_freq = self.context.resampler.target_freq
+        meteo_data = self.context.resampler.resample_meteo_data(
+            meteo_data,
+            freq=target_freq,
+            source_freq=self.context.meteo_loader.freq,
+            datetime_col="datetime",
+            groupby_cols=["station_id"],
+        )
+        meteo_data = meteo_data.update_elevation(self.context.dem, overwrite=True)
+
+        jobs = list(meteo_data.build_jobs(request.start, request.end, request.param))
+        distance_fields = self._prepare_distance_fields(jobs, meteo_data)
+        grid_writer = (
+            self.context.grid_writer.initialize(
+                param=request.param,
+                start=request.start,
+                end=request.end,
+                freq=target_freq,
+            )
+            if self.context.grid_writer is not None
+            else None
+        )
+
+        datefmt = get_date_format_from_freq(target_freq)
+        logger.info(
+            "Prepared %s interpolation job(s) for parameter %s over period %s - %s with frequency %s",
+            len(jobs),
+            request.param,
+            request.start.strftime(datefmt),
+            request.end.strftime(datefmt),
+            target_freq,
+        )
+
+        return PreparedInterpolationRun(
+            request=request,
+            prediction_target=prediction_target,
+            jobs=jobs,
+            distance_fields=distance_fields,
+            grid_writer=grid_writer,
+            target_freq=target_freq,
+        )
+
+    def _submit_jobs(self, prepared: PreparedInterpolationRun) -> list[InterpolationJobResult]:
+        run_job = partial(
+            process_interpolation_job,
+            interpolator=self.context.interpolator,
+            cross_validator=self.context.cross_validator,
+            prediction_target=prepared.prediction_target,
+            distance_fields=prepared.distance_fields,
+        )
+        return list(self.executor.map(run_job, prepared.jobs))
+
+    def _finalize_job(
+        self,
+        job_result: InterpolationJobResult,
+        grid_writer: GridWriter | None,
+    ) -> list[xr.Dataset | xr.DataArray]:
+        if job_result.status != "completed" or job_result.prediction is None:
+            return []
+
+        prediction = job_result.prediction
+        outputs: list[xr.Dataset | xr.DataArray] = []
+        for suffix, result_var in (
+            (None, prediction.prediction),
+            ("vertical", prediction.vertical_prediction),
+            ("residual", prediction.residual_prediction),
+        ):
+            if not isinstance(result_var, (xr.DataArray, xr.Dataset)):
+                continue
+            output = GridWriter.prepare_grid_for_output(
+                result_var,
+                job_result.job.parameter,
+                job_result.job.timestamp,
+                suffix,
+            )
+            if grid_writer is not None:
+                grid_writer.write(output)
+            outputs.append(output)
+
+        if (
+            job_result.cv_result is not None
+            and self.context.db is not None
+            and hasattr(self.context.db, "store_cv_results")
+        ):
+            self.context.db.store_cv_results(
+                job_result.cv_result.fold_results,
+                timestamp=job_result.job.timestamp,
+            )
+
+        return outputs
+
+    def _validate_dates(self, start: datetime, end: datetime) -> None:
+        if start >= end:
+            raise ValueError("start date must be before end date")
+        if start.tzinfo is None or end.tzinfo is None:
+            raise ValueError("Start and end time must both be timezone aware.")
+        if start.tzinfo != end.tzinfo:
+            raise ValueError(
+                f"start and end date must have the same timezone. Got {start.tzinfo} vs {end.tzinfo}"
+            )
+
+    def _prepare_target_points(
+        self,
+        target_points: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame | None,
+    ) -> xr.DataArray | pd.DataFrame | gpd.GeoDataFrame:
+        if target_points is None:
+            return self.context.dem.data
+
+        dem_crs = self.context.dem.crs
+
+        if isinstance(target_points, xr.DataArray):
+            if target_points.rio.crs is None:
+                target_points = target_points.rio.write_crs(dem_crs, inplace=False)
+            if CRS.from_user_input(target_points.rio.crs) != CRS.from_user_input(dem_crs):
+                raise ValueError(
+                    "Target grid CRS must match DEM CRS. Reproject/resample the target grid before interpolation."
+                )
+            return target_points
+
+        if isinstance(target_points, gpd.GeoDataFrame):
+            if target_points.crs is None:
+                raise ValueError("Target point GeoDataFrame must define a CRS.")
+            points = target_points.to_crs(dem_crs).copy()
+            if "station_id" not in points.columns:
+                points["station_id"] = points.index.astype(str)
+            points["x"] = points.geometry.x.astype(float)
+            points["y"] = points.geometry.y.astype(float)
+        elif isinstance(target_points, pd.DataFrame):
+            points = target_points.copy()
+            point_crs = points.attrs.get("crs")
+            if point_crs is not None and CRS.from_user_input(point_crs) != CRS.from_user_input(dem_crs):
+                raise ValueError(
+                    "Plain DataFrame target_points cannot be reprojected. "
+                    "Pass a GeoDataFrame with geometry and CRS, or provide x/y in the DEM CRS."
+                )
+            points.attrs["crs"] = dem_crs
+            if "station_id" not in points.columns:
+                points["station_id"] = points.index.astype(str)
+        else:
+            raise TypeError(
+                "target_points must be None, an xarray DataArray, a pandas DataFrame, "
+                f"or a GeoDataFrame. Got {type(target_points)}"
+            )
+
+        missing_xy = [col for col in ("x", "y") if col not in points.columns]
+        if missing_xy:
+            raise ValueError(f"Point target predictions require x/y columns. Missing: {missing_xy}")
+
+        if "elevation" not in points.columns:
+            x_indexer = xr.DataArray(points["x"].to_numpy(dtype=float), dims=("station_id",))
+            y_indexer = xr.DataArray(points["y"].to_numpy(dtype=float), dims=("station_id",))
+            points["elevation"] = self.context.dem.data.sel(
+                x=x_indexer,
+                y=y_indexer,
+                method="nearest",
+            ).to_numpy()
+
+        points.attrs["crs"] = dem_crs
+        return points
+
+    def _check_station_sample_size(self, n_stations: int) -> None:
+        if n_stations < self.context.interpolator.min_sample_size:
+            raise ValueError(
+                f"Only {n_stations} available, interpolation requires {self.context.interpolator.min_sample_size}"
+            )
+
+    async def _load_meteo_data(
+        self,
+        stations: str | list[str],
+        start,
+        end,
+        sensor_codes: str | list[str],
+    ) -> MeteoData:
+        if isinstance(stations, str):
+            stations = [stations]
+        if isinstance(sensor_codes, str):
+            sensor_codes = [sensor_codes]
+
+        requested_stations = set(stations)
+        async with self._sensor_catalogue_lock:
+            uncached_sensors = [
+                sensor for sensor in sensor_codes if sensor not in self._sensor_catalogue
+            ]
+
+            async with self.context.meteo_loader as meteo_loader:
+                if uncached_sensors:
+                    new_catalogue_entries = await meteo_loader.get_stations_for_sensors(
+                        uncached_sensors
+                    )
+                    if new_catalogue_entries:
+                        self._sensor_catalogue.update(new_catalogue_entries)
+
+                stations_with_sensors = {
+                    station
+                    for sensor, station_ids in self._sensor_catalogue.items()
+                    for station in station_ids
+                    if sensor in sensor_codes
+                }
+
+                valid_stations = sorted(stations_with_sensors.intersection(requested_stations))
+                if not valid_stations:
+                    raise ValueError(
+                        f"Found no stations for sensors {sensor_codes} within the "
+                        f"{len(requested_stations)} requested stations."
+                    )
+                self._check_station_sample_size(len(valid_stations))
+
+                logger.info("Requesting data for %s stations.", len(valid_stations))
+
+                semaphore = asyncio.Semaphore(3)
+
+                async def load_station(station_id: str):
+                    async with semaphore:
+                        return await meteo_loader.get_data(
+                            station_id=station_id,
+                            start=start,
+                            end=end,
+                            sensor_codes=sensor_codes,
+                        )
+
+                tasks = [asyncio.create_task(load_station(st)) for st in valid_stations]
+                station_data = await asyncio.gather(*tasks)
+
+        meteo_data = MeteoData.from_list(station_data)
+
+        if meteo_data.n_stations == 0:
+            raise ValueError("Could not load data for any station.")
+        self._check_station_sample_size(meteo_data.n_stations)
+        logger.info("Loaded data for %s stations.", meteo_data.n_stations)
+
+        return meteo_data
+
+    def _prepare_distance_fields(
+        self,
+        jobs: list[InterpolationJob],
+        meteo_data: MeteoData,
+    ) -> DistanceField | xr.DataArray | None:
+        distance_calculator = self.context.distance_calculator
+        if distance_calculator is None:
+            return None
+
+        job_station_ids = sorted(
+            {
+                str(station_id)
+                for job in jobs
+                for station_id in job.observations["station_id"].values
+            }
+        )
+        if not job_station_ids:
+            return None
+
+        projected_stations = meteo_data.get_projected_station_coords(self.context.dem.data)
+        run_stations = {
+            station_id: projected_stations[station_id]
+            for station_id in job_station_ids
+        }
+        return distance_calculator.calculate_fields(
+            self.context.dem,
+            [coords[0] for coords in run_stations.values()],
+            [coords[1] for coords in run_stations.values()],
+            list(run_stations.keys()),
+        )
