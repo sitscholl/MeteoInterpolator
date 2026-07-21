@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Iterable
+from collections.abc import Callable, Iterable
 
 from ..interpolate import InterpolationJob
 from ..worker import InterpolationJobResult
@@ -7,5 +7,9 @@ from ..worker import InterpolationJobResult
 class JobExecutor(ABC):
 
     @abstractmethod
-    def map(self, func, jobs: Iterable[InterpolationJob]) -> Iterable[InterpolationJobResult]:
+    def map(
+        self,
+        func: Callable[[InterpolationJob], InterpolationJobResult],
+        jobs: Iterable[InterpolationJob],
+    ) -> Iterable[InterpolationJobResult]:
         ...

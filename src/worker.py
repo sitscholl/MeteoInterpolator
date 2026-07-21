@@ -20,11 +20,11 @@ class InterpolationJobResult:
     stats: dict[str, Any] = field(default_factory=dict)
 
 def process_interpolation_job(
-    job,
+    job: InterpolationJob,
     interpolator: Interpolator,
     cross_validator: CrossValidator,
     prediction_target: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame,
-    distance_fields: DistanceField,
+    distance_fields: DistanceField | xr.DataArray | None,
 ) -> InterpolationJobResult:
     logger.info('Starting %s', job)
 
@@ -76,5 +76,5 @@ def process_interpolation_job(
     except Exception as e:
         logger.exception(f"{job} failed with error: {e}")
         return InterpolationJobResult(
-            job = job, prediction = None, cv_result = None, status = 'failed', error = e
+            job = job, prediction = None, cv_result = None, status = 'failed', error = str(e)
         )
