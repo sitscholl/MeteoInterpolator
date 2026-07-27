@@ -23,8 +23,10 @@ class MeteoData:
     observations: pd.DataFrame
 
     def __post_init__(self):
-        self.observations = _STATION_DATA_SCHEMA.validate(self.observations)
-        self.stations = _OBSERVATION_POINTS_SCHEMA.validate(self.stations)
+        if not self.observations.empty:
+            self.observations = _STATION_DATA_SCHEMA.validate(self.observations)
+        if not self.stations.empty:
+            self.stations = _OBSERVATION_POINTS_SCHEMA.validate(self.stations)
 
         stations_ids = pd.Index(self.stations.index.astype(str))
         observation_ids = pd.Index(self.observations['station_id'].astype(str).unique())
