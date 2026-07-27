@@ -1,9 +1,9 @@
 from datetime import datetime
 from typing import Annotated, Literal, Self
+from zoneinfo import ZoneInfo
 
 import pandas as pd
-from pydantic import AfterValidator, BeforeValidator, BaseModel, model_validator
-from pytz import timezone
+from pydantic import AfterValidator, BaseModel, BeforeValidator, model_validator
 from pytz.exceptions import UnknownTimeZoneError
 
 from ..utils import localize_datetime_string
@@ -28,7 +28,7 @@ def validate_timezone(tz: str) -> str:
         raise ValueError("Timezone must be a non-empty string.")
 
     try:
-        timezone(tz)
+        ZoneInfo(tz)
     except UnknownTimeZoneError as exc:
         raise ValueError(f"Invalid timezone: {tz!r}") from exc
 
@@ -49,6 +49,10 @@ class InterpolationRequest(BaseModel):
         if self.start >= self.end:
             raise ValueError("start date must be before end date")
         return self
+
+    @property
+    def tzinfo(self) -> ZoneInfo:
+        return ZoneInfo(self.timezone)
 
 
 class InterpolationSubmission(BaseModel):
