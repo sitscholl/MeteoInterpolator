@@ -1,7 +1,6 @@
 import asyncio
 import logging
 
-import pandas as pd
 from fastapi import FastAPI
 
 from ..coordinator import InterpolationCoordinator
@@ -38,9 +37,14 @@ async def display_interpolation_stations():
         runtime.station_catalog.to_json()
     }
 
-@app.get("/api/interpolate")
-async def interpolate(param: str, start: str, end: str, response_model=InterpolationSubmission):
+@app.get("/api/interpolate", response_model=InterpolationSubmission)
+async def interpolate(
+    param: str,
+    start: str,
+    end: str,
+    timezone: str = "Europe/Rome",
+):
     
-    request = InterpolationRequest(param = param, start = pd.Timestamp(start), end = pd.Timestamp(end))
+    request = InterpolationRequest(param=param, start=start, end=end, timezone=timezone)
     logger.info("Submitting request %s", request)
     return await coordinator.submit(request)
