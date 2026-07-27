@@ -1,11 +1,13 @@
-import pandas as pd
-
+import inspect
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-import inspect
-from typing import Any, Dict
+from typing import Any
+from zoneinfo import ZoneInfo
+
+import pandas as pd
 
 from ..domain.schemas import _STATION_DATA_SCHEMA
+
 
 @dataclass
 class Station:
@@ -94,7 +96,7 @@ class BaseMeteoHandler(ABC):
         pass
 
     @abstractmethod
-    async def get_station_info(self, station_id: str | None) -> Dict[str, Any]:
+    async def get_station_info(self, station_id: str | None) -> dict[str, Any]:
         """
         Query information for a given station from the source, 
         such as elevation, latitude or longitude.
@@ -108,7 +110,7 @@ class BaseMeteoHandler(ABC):
         pass
 
     @abstractmethod
-    async def get_stations_for_sensors(self, sensors: str | list[str]) -> Dict[str, list[str]]:
+    async def get_stations_for_sensors(self, sensors: str | list[str]) -> dict[str, list[str]]:
         """
         Query station ids that expose the requested sensor code(s).
 
@@ -147,7 +149,7 @@ class BaseMeteoHandler(ABC):
         """
         pass
 
-    async def get_data(self, **kwargs) -> Station :
+    async def get_data(self, target_timezone: ZoneInfo, **kwargs) -> Station :
         """
         Run the complete data processing pipeline.
         
@@ -163,7 +165,7 @@ class BaseMeteoHandler(ABC):
             Station: A station object with validated data
         """
         raw_data, metadata = await self.get_raw_data(**kwargs)
-        transformed_data = self.transform(raw_data)
+        transformed_data = self.transform(raw_data, target_timezone)
             
         return Station(
             id = metadata.get('id'),

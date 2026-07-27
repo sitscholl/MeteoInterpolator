@@ -8,6 +8,7 @@ from datetime import datetime
 from functools import partial
 from typing import Literal
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import geopandas as gpd
 import pandas as pd
@@ -285,6 +286,7 @@ class InterpolationCoordinator:
             request.start,
             request.end,
             request.param,
+            request.tzinfo
         )
         meteo_data = meteo_data.to_crs(target_crs)
 
@@ -462,6 +464,7 @@ class InterpolationCoordinator:
         stations: str | list[str],
         start,
         end,
+        tzinfo: ZoneInfo,
         sensor_codes: str | list[str],
     ) -> MeteoData:
         if isinstance(stations, str):
@@ -509,6 +512,7 @@ class InterpolationCoordinator:
                             start=start,
                             end=end,
                             sensor_codes=sensor_codes,
+                            target_timezone=tzinfo
                         )
 
                 tasks = [asyncio.create_task(load_station(st)) for st in valid_stations]

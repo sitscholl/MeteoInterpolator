@@ -1,3 +1,4 @@
+from zoneinfo import ZoneInfo
 import pandas as pd
 import asyncio
 import httpx
@@ -24,7 +25,6 @@ class ProvinceAPI(BaseMeteoHandler):
 
     def __init__(
             self, 
-            target_timezone: str = 'UTC',
             chunk_size_days: int = 365, 
             timeout: int = 20, 
             max_concurrent_requests: int = 5,
@@ -32,7 +32,6 @@ class ProvinceAPI(BaseMeteoHandler):
             **kwargs
         ):
         self.timezone = "Europe/Rome"
-        self.target_timezone = target_timezone
         self.chunk_size_days = chunk_size_days
         self.timeout = timeout
 
@@ -355,7 +354,7 @@ class ProvinceAPI(BaseMeteoHandler):
             logger.warning(f"No data could be fetched for station {station_id} and sensors {sensor_codes}")
             return None, st_metadata
 
-    def transform(self, raw_data: pd.DataFrame | None):
+    def transform(self, raw_data: pd.DataFrame | None, target_timezone: ZoneInfo):
 
         if raw_data is None:
             return None
@@ -383,7 +382,7 @@ class ProvinceAPI(BaseMeteoHandler):
                 self.timezone, 
                 ambiguous=is_dst,
                 nonexistent='shift_forward' # handle the spring "gap" too
-            ).dt.tz_convert(self.target_timezone)
+            ).dt.tz_convert(target_timezone)
 
             df_pivot['datetime'] = df_pivot['datetime'].dt.floor(self.freq)
         except Exception as e:

@@ -1,6 +1,3 @@
-general:
-  timezone: Europe/Rome
-
 meteo_data:
   # handler: province_api
   # stations: ['02500MS', '09700MS', '15800MS', '19300MS', '23200MS', '25900MS', '34500MS', '37100MS', '39100MS',

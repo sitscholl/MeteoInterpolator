@@ -83,10 +83,6 @@ class RuntimeContext:
         return stations_in_dem
 
     async def initialize_runtime(self, config: dict):
-
-        ## General
-        general_config = config['general']            
-        self.timezone = general_config['timezone']
        
         ## Cache
         cache_config = config.get("cache", {})
@@ -105,7 +101,7 @@ class RuntimeContext:
         ## Meteo Loader
         meteo_data_config = dict(config['meteo_data'])
         handler_name = meteo_data_config.pop('handler')
-        self.meteo_loader = BaseMeteoHandler.create(handler_name, target_timezone = self.timezone, **meteo_data_config)
+        self.meteo_loader = BaseMeteoHandler.create(handler_name, **meteo_data_config)
         logger.info(f'Initialized {handler_name} meteo loader')
 
         ## Stations

@@ -17,8 +17,8 @@ if __name__ == '__main__':
     async def run_interpolation():
         runtime = await RuntimeContext.from_config_file('config.example.yaml')
         coordinator = InterpolationCoordinator(runtime)
-        start = pd.Timestamp("2021-12-01", tz=runtime.timezone)
-        end = pd.Timestamp("2021-12-02", tz=runtime.timezone)
+        start = "2021-12-01"
+        end = "2021-12-02"
 
         request = InterpolationRequest('tair_2m', start, end)
 
