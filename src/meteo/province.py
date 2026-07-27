@@ -410,6 +410,7 @@ if __name__ == '__main__':
             print(st_info)
 
             data = await meteo_handler.get_data(
+                target_timezone=ZoneInfo("Europe/Rome"),
                 station_id = '86900MS',
                 sensor_codes = ["LT", 'N', 'LF'],
                 start = start,

@@ -285,8 +285,8 @@ class InterpolationCoordinator:
             self.context.station_ids,
             request.start,
             request.end,
+            request.tzinfo,
             request.param,
-            request.tzinfo
         )
         meteo_data = meteo_data.to_crs(target_crs)
 

@@ -137,7 +137,7 @@ class BaseMeteoHandler(ABC):
         pass
 
     @abstractmethod
-    def transform(self, raw_data: Any) -> pd.DataFrame:
+    def transform(self, raw_data: Any, target_timezone: ZoneInfo) -> pd.DataFrame:
         """
         Transform the raw data into a standardized format.
         

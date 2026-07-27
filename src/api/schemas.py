@@ -1,10 +1,9 @@
 from datetime import datetime
 from typing import Annotated, Literal, Self
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pandas as pd
 from pydantic import AfterValidator, BaseModel, BeforeValidator, model_validator
-from pytz.exceptions import UnknownTimeZoneError
 
 from ..utils import localize_datetime_string
 
@@ -29,7 +28,7 @@ def validate_timezone(tz: str) -> str:
 
     try:
         ZoneInfo(tz)
-    except UnknownTimeZoneError as exc:
+    except ZoneInfoNotFoundError as exc:
         raise ValueError(f"Invalid timezone: {tz!r}") from exc
 
     return tz

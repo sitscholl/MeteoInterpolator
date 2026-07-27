@@ -4,7 +4,7 @@ import pandas as pd
 from src.meteo import BaseMeteoHandler
 
 def main():
-    meteo_loader = BaseMeteoHandler.create("province_api", target_timezone = "Europe/Rome")
+    meteo_loader = BaseMeteoHandler.create("province_api")
 
     async def load():
         async with meteo_loader as loader: 

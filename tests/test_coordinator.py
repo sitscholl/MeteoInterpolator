@@ -1,8 +1,10 @@
 import asyncio
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 from shapely.geometry import Point
@@ -12,6 +14,7 @@ from src.coordinator import (
     InterpolationCoordinator,
 )
 from src.interpolate import DistanceField
+from src.meteo.base import Station
 
 
 class _RecordingDistanceCalculator:
@@ -41,6 +44,38 @@ class _RecordingDistanceCalculator:
         )
 
 
+class _RecordingMeteoLoader:
+    freq = "D"
+
+    def __init__(self):
+        self.calls = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+    async def get_stations_for_sensors(self, sensors):
+        return {sensor: ["a"] for sensor in sensors}
+
+    async def get_data(self, **kwargs):
+        self.calls.append(kwargs)
+        return Station(
+            id="a",
+            x=11.0,
+            y=46.0,
+            crs=4326,
+            data=pd.DataFrame(
+                {
+                    "datetime": [pd.Timestamp("2026-01-01", tz=kwargs["target_timezone"])],
+                    "station_id": ["a"],
+                    "tair_2m": [1.0],
+                }
+            ),
+        )
+
+
 def _coordinator(cache_manager=None):
     station_catalog = gpd.GeoDataFrame(
         {"station_id": ["b", "a"]},
@@ -56,6 +91,31 @@ def _coordinator(cache_manager=None):
         dem=SimpleNamespace(crs=4326, data=xr.DataArray([[1.0]], dims=("y", "x"))),
     )
     return InterpolationCoordinator(context), distance_calculator
+
+
+def test_load_meteo_data_passes_request_timezone_and_sensor_codes():
+    meteo_loader = _RecordingMeteoLoader()
+    context = SimpleNamespace(
+        station_ids=["a"],
+        meteo_loader=meteo_loader,
+        interpolator=SimpleNamespace(min_sample_size=1),
+    )
+    coordinator = InterpolationCoordinator(context)
+    tzinfo = ZoneInfo("Europe/Rome")
+
+    result = asyncio.run(
+        coordinator._load_meteo_data(
+            ["a"],
+            pd.Timestamp("2026-01-01", tz=tzinfo),
+            pd.Timestamp("2026-01-02", tz=tzinfo),
+            tzinfo,
+            "tair_2m",
+        )
+    )
+
+    assert result.n_stations == 1
+    assert meteo_loader.calls[0]["target_timezone"] is tzinfo
+    assert meteo_loader.calls[0]["sensor_codes"] == ["tair_2m"]
 
 
 def test_prepare_distance_fields_uses_stable_sorted_station_set():

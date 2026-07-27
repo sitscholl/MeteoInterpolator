@@ -1,4 +1,5 @@
 import asyncio
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -65,7 +66,6 @@ def test_local_file_handler_filters_globbed_station_files_and_infers_station_id(
     handler = LocalFileMeteoHandler(
         observations_path=str(station_files / "*.csv"),
         station_metadata_path=str(stations_path),
-        target_timezone="Europe/Rome",
     )
 
     result = asyncio.run(handler.get_stations_for_sensors(["tair_2m", "solar_radiation"]))
@@ -79,7 +79,6 @@ def test_local_file_handler_get_data_returns_valid_station_with_renamed_columns(
     handler = LocalFileMeteoHandler(
         observations_path=str(station_files / "*.csv"),
         station_metadata_path=str(stations_path),
-        target_timezone="Europe/Rome",
     )
 
     station = asyncio.run(
@@ -88,6 +87,7 @@ def test_local_file_handler_get_data_returns_valid_station_with_renamed_columns(
             start=pd.Timestamp("2026-01-01", tz="Europe/Rome"),
             end=pd.Timestamp("2026-01-03", tz="Europe/Rome"),
             sensor_codes=["tair_2m", "solar_radiation"],
+            target_timezone=ZoneInfo("Europe/Rome"),
         )
     )
 
@@ -105,7 +105,6 @@ def test_local_file_handler_drops_rows_with_all_requested_sensors_missing(tmp_pa
     handler = LocalFileMeteoHandler(
         observations_path=str(station_files / "*.csv"),
         station_metadata_path=str(stations_path),
-        target_timezone="Europe/Rome",
     )
 
     station = asyncio.run(
@@ -114,6 +113,7 @@ def test_local_file_handler_drops_rows_with_all_requested_sensors_missing(tmp_pa
             start=pd.Timestamp("2026-01-01", tz="Europe/Rome"),
             end=pd.Timestamp("2026-01-05", tz="Europe/Rome"),
             sensor_codes=["tair_2m", "solar_radiation"],
+            target_timezone=ZoneInfo("Europe/Rome"),
         )
     )
 
@@ -132,7 +132,6 @@ def test_local_file_handler_skips_station_when_requested_sensor_is_missing(tmp_p
     handler = LocalFileMeteoHandler(
         observations_path=str(station_files / "*.csv"),
         station_metadata_path=str(stations_path),
-        target_timezone="Europe/Rome",
     )
 
     station = asyncio.run(
@@ -141,6 +140,7 @@ def test_local_file_handler_skips_station_when_requested_sensor_is_missing(tmp_p
             start=pd.Timestamp("2026-01-01"),
             end=pd.Timestamp("2026-01-03"),
             sensor_codes=["solar_radiation"],
+            target_timezone=ZoneInfo("Europe/Rome"),
         )
     )
 

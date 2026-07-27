@@ -2,6 +2,7 @@ import glob
 import logging
 from pathlib import Path
 from typing import Any, Dict
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -18,12 +19,12 @@ class LocalFileMeteoHandler(BaseMeteoHandler):
         self,
         observations_path: str | list[str],
         station_metadata_path: str,
-        target_timezone: str = "UTC",
+        timezone: str,
         **kwargs,
     ):
+        self.timezone = timezone
         self.observations_path = observations_path
         self.station_metadata_path = station_metadata_path
-        self.target_timezone = target_timezone
 
         if self.station_metadata_path is None:
             raise ValueError(
@@ -124,26 +125,24 @@ class LocalFileMeteoHandler(BaseMeteoHandler):
         rename_map = SENSORS.rename_map(self.provider_name)
         return [rename_map.get(code, code) for code in provider_codes]
 
-    def _normalize_observations(self, raw_data: pd.DataFrame) -> pd.DataFrame:
+    def _normalize_observations(
+        self,
+        raw_data: pd.DataFrame,
+    ) -> pd.DataFrame:
         data = raw_data.copy()
         if "datetime" not in data.columns:
             raise ValueError("Local observation files must contain a datetime column or a column renamed to datetime.")
         if "station_id" not in data.columns:
             raise ValueError("Local observation files must contain station_id or use one station per filename.")
-
         data["datetime"] = pd.to_datetime(data["datetime"])
-        if data["datetime"].dt.tz is None:
-            data["datetime"] = data["datetime"].dt.tz_localize(self.target_timezone)
-        else:
-            data["datetime"] = data["datetime"].dt.tz_convert(self.target_timezone)
         data["station_id"] = data["station_id"].astype(str)
         return data
 
-    def _to_target_timestamp(self, value) -> pd.Timestamp:
+    def _to_target_timestamp(self, value, target_timezone: ZoneInfo) -> pd.Timestamp:
         timestamp = pd.Timestamp(value)
         if timestamp.tzinfo is None:
-            return timestamp.tz_localize(self.target_timezone)
-        return timestamp.tz_convert(self.target_timezone)
+            return timestamp.tz_localize(target_timezone)
+        return timestamp.tz_convert(target_timezone)
 
     def _drop_empty_sensor_rows(self, data: pd.DataFrame) -> pd.DataFrame:
         sensor_columns = [col for col in data.columns if col not in ("datetime", "station_id")]
@@ -227,9 +226,15 @@ class LocalFileMeteoHandler(BaseMeteoHandler):
             logger.warning("No local observations found for station %s", station_id)
             return None, st_metadata
 
-        data = self._normalize_observations(raw_data)
-        start_ts = self._to_target_timestamp(start)
-        end_ts = self._to_target_timestamp(end)
+        data = self._normalize_observations(raw_data, self.timezone)
+        
+        if data["datetime"].dt.tz is None:
+            data["datetime"] = data["datetime"].dt.tz_localize(self.timezone)
+        elif data['datetime'].dt.tz != self.timezone:
+            raise ValueError(f"Timezone from loaded data does not match configured timezone. Got {data['datetime'].dt.tz} vs {self.timezone}")
+
+        start_ts = self._to_target_timestamp(start, self.timezone)
+        end_ts = self._to_target_timestamp(end, self.timezone)
         data = data.loc[(data["datetime"] >= start_ts) & (data["datetime"] < end_ts)].copy()
 
         if sensor_codes is not None:
@@ -249,11 +254,12 @@ class LocalFileMeteoHandler(BaseMeteoHandler):
 
         return data, st_metadata
 
-    def transform(self, raw_data: pd.DataFrame | None):
+    def transform(self, raw_data: pd.DataFrame | None, target_timezone: ZoneInfo):
         if raw_data is None:
             return None
 
-        data = self._normalize_observations(raw_data)
+        data = raw_data.copy()
+        data["datetime"] = data["datetime"].dt.tz_convert(target_timezone)
         if data[["datetime", "station_id"]].duplicated().any():
             logger.warning("Found duplicate local observations for ['datetime', 'station_id']. They will be dropped")
             data = data.drop_duplicates(subset=["datetime", "station_id"])

@@ -6,6 +6,7 @@ meteo_data:
   handler: local_file
   station_metadata_path: data/province/stations.csv
   observations_path: data/province/station_files/*.csv
+  timezone: Europe/Rome
 
 resampling:
   target_freq: D

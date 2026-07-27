@@ -100,7 +100,7 @@ class InterpolationWorkflow:
             raise ValueError(f"Only {n_stations} available, interpolation requires {self.context.interpolator.min_sample_size}")
 
     async def _load_meteo_data(
-        self, stations: str | list[str], start, end, sensor_codes: str | list[str]
+        self, stations: str | list[str], start, end, tzinfo, sensor_codes: str | list[str]
         ):
         if isinstance(stations, str):
             stations = [stations]      
@@ -134,6 +134,7 @@ class InterpolationWorkflow:
                         start = start, 
                         end = end, 
                         sensor_codes = sensor_codes, 
+                        target_timezone=tzinfo,
                         )
             tasks = [asyncio.create_task(load_station(st)) for st in valid_stations]
             station_data = await asyncio.gather(*tasks)
@@ -192,7 +193,7 @@ class InterpolationWorkflow:
             else prediction_target.attrs["crs"]
         )
 
-        meteo_data = await self._load_meteo_data(self.context.station_ids, start, end, param)
+        meteo_data = await self._load_meteo_data(self.context.station_ids, start, end, start.tzinfo, param)
         meteo_data = meteo_data.to_crs(target_crs)
         
         if self.context.gapfiller is not None:
