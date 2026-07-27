@@ -19,10 +19,10 @@ class LocalFileMeteoHandler(BaseMeteoHandler):
         self,
         observations_path: str | list[str],
         station_metadata_path: str,
-        timezone: str,
+        timezone: str | ZoneInfo,
         **kwargs,
     ):
-        self.timezone = timezone
+        self.timezone = timezone if isinstance(timezone, ZoneInfo) else ZoneInfo(timezone)
         self.observations_path = observations_path
         self.station_metadata_path = station_metadata_path
 
@@ -226,11 +226,11 @@ class LocalFileMeteoHandler(BaseMeteoHandler):
             logger.warning("No local observations found for station %s", station_id)
             return None, st_metadata
 
-        data = self._normalize_observations(raw_data, self.timezone)
+        data = self._normalize_observations(raw_data)
         
         if data["datetime"].dt.tz is None:
             data["datetime"] = data["datetime"].dt.tz_localize(self.timezone)
-        elif data['datetime'].dt.tz != self.timezone:
+        elif str(data["datetime"].dt.tz) != str(self.timezone):
             raise ValueError(f"Timezone from loaded data does not match configured timezone. Got {data['datetime'].dt.tz} vs {self.timezone}")
 
         start_ts = self._to_target_timestamp(start, self.timezone)

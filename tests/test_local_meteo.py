@@ -66,6 +66,7 @@ def test_local_file_handler_filters_globbed_station_files_and_infers_station_id(
     handler = LocalFileMeteoHandler(
         observations_path=str(station_files / "*.csv"),
         station_metadata_path=str(stations_path),
+        timezone="Europe/Rome",
     )
 
     result = asyncio.run(handler.get_stations_for_sensors(["tair_2m", "solar_radiation"]))
@@ -79,6 +80,7 @@ def test_local_file_handler_get_data_returns_valid_station_with_renamed_columns(
     handler = LocalFileMeteoHandler(
         observations_path=str(station_files / "*.csv"),
         station_metadata_path=str(stations_path),
+        timezone="Europe/Rome",
     )
 
     station = asyncio.run(
@@ -105,6 +107,7 @@ def test_local_file_handler_drops_rows_with_all_requested_sensors_missing(tmp_pa
     handler = LocalFileMeteoHandler(
         observations_path=str(station_files / "*.csv"),
         station_metadata_path=str(stations_path),
+        timezone="Europe/Rome",
     )
 
     station = asyncio.run(
@@ -132,6 +135,7 @@ def test_local_file_handler_skips_station_when_requested_sensor_is_missing(tmp_p
     handler = LocalFileMeteoHandler(
         observations_path=str(station_files / "*.csv"),
         station_metadata_path=str(stations_path),
+        timezone="Europe/Rome",
     )
 
     station = asyncio.run(
