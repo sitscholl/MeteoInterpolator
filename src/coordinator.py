@@ -15,6 +15,7 @@ import rioxarray  # noqa: F401
 import xarray as xr
 from pyproj import CRS
 
+from .api.schemas import InterpolationRequest, InterpolationSubmission
 from .array.writer import GridWriter
 from .domain.meteo_data import MeteoData
 from .execute.base import JobExecutor
@@ -32,22 +33,8 @@ BackgroundOperation = Literal["interpolation", "distance_precompute"]
 
 
 @dataclass(frozen=True)
-class InterpolationRequest:
-    param: str
-    start: datetime
-    end: datetime
-    target_points: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame | None = None
-
-
-@dataclass(frozen=True)
 class DistanceFieldPrecomputeRequest:
     station_ids: Sequence[str] | None = None
-
-
-@dataclass(frozen=True)
-class InterpolationSubmission:
-    request_id: str
-    status: RunStatus
 
 
 @dataclass(frozen=True)
@@ -120,6 +107,7 @@ class InterpolationCoordinator:
         request_id: str | None = None,
     ) -> InterpolationRunResult:
 
+        ##TODO: InterpolationRequest.target_points data type changed. Implement support for new input structure
         if request.param != 'tair_2m':
             raise NotImplementedError(f"Interpolation is currently only implemented for parameter 'tair_2m'. Got {request.param}")
 

@@ -1,61 +1,43 @@
 import logging
-from datetime import datetime
-import argparse
-import asyncio
+import os
 
-from src.utils import localize_datetime_string
-from src.runtime import RuntimeContext
-from src.workflow import InterpolationWorkflow
+import uvicorn
 
 logger = logging.getLogger(__name__)
 
-async def _main():
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-p', '--param', required=True, help = 'Parameter to interpolate, for instance tair_2m')
-    parser.add_argument('-s', '--start', required=True, help = 'Start date for interpolation in ISO format, e.g. 2026-05-13')
-    parser.add_argument('-e', '--end', required=True, help = 'Exclusive end date for interpolation in ISO format, e.g. 2026-05-15')
-    parser.add_argument('-c', '--config', default='config.yaml', help = 'Path to configuration file')
-    parser.add_argument('-v', action='store_true', help = 'Turn on verbose logging')
-    args = parser.parse_args()
-
-    log_level = logging.DEBUG if args.v else logging.INFO
-    logging.basicConfig(level = log_level, force = True, format='%(name)s - %(levelname)s - %(message)s')
-
-    if args.param != 'tair_2m':
-        raise NotImplementedError(f"Interpolation is currently only implemented for parameter 'tair_2m'. Got {args.param}")
-
-    logger.info("="*50)
-    logger.info("Starting interpolation at %s", datetime.now().strftime("%H:%M:%S"))
-    logger.info("="*50)
-
-    runtime = await RuntimeContext.from_config_file(args.config)
-    start = localize_datetime_string(args.start, runtime.timezone)
-    end = localize_datetime_string(args.end, runtime.timezone)
-    interpolation_workflow = InterpolationWorkflow(runtime)
-    
-    logger.info("Initialized Runtime Context and Interpolation Workflow")
-
-    try:
-        # runtime.cluster_manager.spin_up_workers() #will be implemented later
-
-        logger.info(f"Starting interpolation workflow for parameter {args.param} over period {start} - {end}")
-        result = await interpolation_workflow.run(param = args.param, start = start, end = end)
-        logger.info("Interpolation workflow produced %s grid(s)", len(result))
-
-    except Exception:
-        logger.exception("Error running workflow")
-        raise
-    finally:
-        # runtime.cluster_manager.stop_cluster()
-
-        logger.info("="*50)
-        logger.info("Finished interpolation at %s", datetime.now().strftime("%H:%M:%S"))
-        logger.info("="*50)
-
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 def main():
-    asyncio.run(_main())
+
+    ##Set up application logging
+    verbose = _env_bool("VERBOSE_LOGGING", True)
+
+    log_level = logging.DEBUG if verbose else logging.INFO
+    #log_formatter = logging.Formatter("%(asctime)s;%(levelname)s;%(message)s", "%Y-%m-%d %H:%M:%S")
+    logging.basicConfig(level = log_level, force = True, format='%(asctime)s %(name)s - %(levelname)s - %(message)s')
+    
+    #Avoid noisy loggers spam
+    logging.getLogger('httpx').setLevel(logging.WARNING)
+    logging.getLogger('httpcore').setLevel(logging.WARNING)
+    logging.getLogger('rasterio').setLevel(logging.WARNING)
+
+    logger.info("="*50)
+    logger.info("Starting MeteoInterpolator")
+    logger.info("="*50)
+
+    uvicorn.run(
+        "src.api.app:app",
+        host=os.getenv("UVICORN_HOST", "0.0.0.0"),
+        port=int(os.getenv("UVICORN_PORT", "8000")),
+        workers=int(os.getenv("UVICORN_WORKERS", "1")),
+        log_level=os.getenv("UVICORN_LOG_LEVEL", (log_level or 1)),
+        log_config=None,
+        access_log=_env_bool("UVICORN_ACCESS_LOG", True),
+    )
 
 
 if __name__ == "__main__":
