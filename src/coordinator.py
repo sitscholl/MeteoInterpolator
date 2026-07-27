@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import partial
-from collections.abc import Sequence
 from typing import Literal
 from uuid import uuid4
 
@@ -106,7 +106,6 @@ class PreparedInterpolationRun:
 class InterpolationCoordinator:
     context: RuntimeContext
     executor: JobExecutor = field(default_factory=SerialExecutor)
-    target_points: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame | None = None
 
     def __post_init__(self) -> None:
         self._sensor_catalogue: dict[str, list[str]] = {}
@@ -120,6 +119,10 @@ class InterpolationCoordinator:
         *,
         request_id: str | None = None,
     ) -> InterpolationRunResult:
+
+        if request.param != 'tair_2m':
+            raise NotImplementedError(f"Interpolation is currently only implemented for parameter 'tair_2m'. Got {request.param}")
+
         request_id = request_id or str(uuid4())
         prepared = await self._prepare_request(request)
         job_results = self._submit_jobs(prepared)
@@ -282,9 +285,7 @@ class InterpolationCoordinator:
 
     async def _prepare_request(self, request: InterpolationRequest) -> PreparedInterpolationRun:
         self._validate_dates(request.start, request.end)
-        prediction_target = self._prepare_target_points(
-            request.target_points if request.target_points is not None else self.target_points
-        )
+        prediction_target = self._prepare_target_points(request.target_points)
         target_crs = (
             prediction_target.rio.crs
             if isinstance(prediction_target, xr.DataArray)
