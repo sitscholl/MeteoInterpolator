@@ -14,7 +14,7 @@ from .interpolator import InterpolationJob, Interpolator
 logger = logging.getLogger(__name__)
 
 def _point_distances(
-    distance_fields: DistanceField | xr.DataArray | None,
+    distance_fields: DistanceField,
     observations: pd.DataFrame,
 ) -> xr.DataArray | None:
     if distance_fields is None:
@@ -24,19 +24,7 @@ def _point_distances(
     x_coords = observations["x"].to_numpy(dtype=float)
     y_coords = observations["y"].to_numpy(dtype=float)
 
-    if isinstance(distance_fields, DistanceField):
-        return distance_fields.to_points(ids, x_coords, y_coords)
-
-    if not isinstance(distance_fields, xr.DataArray):
-        raise TypeError(f"distance_fields must be a DistanceField or xarray DataArray. Got {type(distance_fields)}")
-
-    if "target_id" in distance_fields.dims:
-        return distance_fields
-
-    return DistanceField(
-        distance_type=distance_fields.attrs.get("distance_type", distance_fields.name or "distance"),
-        data=distance_fields,
-    ).to_points(ids, x_coords, y_coords)
+    return distance_fields.to_points(ids, x_coords, y_coords)
 
 def _is_marginal_improvement(candidate_score, current_best, min_improvement):
     if candidate_score is None:
@@ -68,8 +56,14 @@ class CrossValidationResult:
         }
 
     def __post_init__(self):
-        #validate fold_results dataframe
-        pass
+        required_cols = [*list(self.param_grid.keys()), 'observed', 'predicted']
+        for c in required_cols:
+            if c not in self.fold_results.columns:
+                raise ValueError(f"Missing column {c} in fold results. Got {self.fold_results.columns}")
+        
+        for param_values in self.param_grid.values():
+            if any(i is None for i in param_values):
+                raise ValueError("The parameter grid cannot contain None values for any parameter")
 
     def calculate_fold_scores(self, metric: str = 'rmse'):
 
@@ -81,6 +75,8 @@ class CrossValidationResult:
 
     def get_best_parameters(self, metric: str = 'rmse'):
         fold_scores = self.calculate_fold_scores(metric)
+        if fold_scores.empty:
+            return {}, None
 
         best_params = fold_scores.idxmin()
         
@@ -97,9 +93,21 @@ def cross_validate(
     param_grid: dict[str, list[Any]], 
     distance_fields: DistanceField,
     n_splits: int | None = None, 
-    min_score_improvement: float | None = None,
+    min_relative_score_improvement: float | None = None,
     improvement_latency_steps: int = 3
 ):
+
+    if len(param_grid.keys()) > 1 or 'lam_value' not in list(param_grid.keys()):
+        raise NotImplementedError(f"Currently cross validation parameter grid can only contain a single parameter named lam_value. Got {param_grid.keys()}")
+    if len(param_grid['lam_value']) == 0:
+        raise ValueError("Parameter grid for lam values cannot be empty")
+    if improvement_latency_steps < 1 or not np.isfinite(improvement_latency_steps):
+        raise ValueError(f"improvement_latency_steps arguments must be greater than 0. Got {improvement_latency_steps}")
+    if min_relative_score_improvement is not None and min_relative_score_improvement < 0:
+        raise ValueError(f"Min relative score improvement must be greater than 0. Got {min_relative_score_improvement}")
+    if not isinstance(distance_fields, DistanceField):
+        raise TypeError(f"distance fields must be of type DistanceField. Got {type(distance_fields)}")
+
     observations = job.observations.reset_index(drop=True)
     point_distances = _point_distances(distance_fields, observations)
 
@@ -110,7 +118,8 @@ def cross_validate(
     cv_folds = list(KFold(n_splits).split(observations))
 
     ## Build cv-parameter-grid
-    parameter_grid = ParameterGrid(param_grid)
+    sorted_grid = {"lam_value": sorted(param_grid["lam_value"])}
+    parameter_grid = ParameterGrid(sorted_grid)
 
     results = []
     best_param_score = None
@@ -130,6 +139,9 @@ def cross_validate(
                 observed_values = test_obs[job.parameter].values
                 test_ids = test_obs["station_id"].unique()
 
+                if len(train_obs) < estimator.min_sample_size:
+                    raise ValueError(f"{estimator.min_sample_size} samples are required for model fitting. Got {len(train_obs)} for fold {i}.")
+
                 fold_distances = (
                     point_distances.sel(target_id=point_distances.target_id.isin(test_ids))
                     if point_distances is not None
@@ -139,7 +151,7 @@ def cross_validate(
                 fold_job = InterpolationJob(
                             timestamp=job.timestamp,
                             parameter=job.parameter,
-                            observations=observations,
+                            observations=train_obs,
                             training_points=job.training_points.loc[train_obs['station_id'].astype(str).tolist()],
                         )
                 fitted = estimator.fit(fold_job)
@@ -148,7 +160,7 @@ def cross_validate(
                         fitted,
                         test_obs,
                         fold_distances,
-                        lam_value=param_combination['lambda'],
+                        **param_combination,
                     )
                 predicted_values = fold_prediction.prediction.values
                 
@@ -162,17 +174,17 @@ def cross_validate(
                 rows.append(fold_result)
             except Exception as e:
                 logger.exception(f"Cross validation fold {i} for parameters {param_combination} failed.")
+                raise
                         
         param_combination_results = pd.concat(rows)
         results.append(param_combination_results)
 
-        if min_score_improvement is None:
+        if min_relative_score_improvement is None:
             continue
         else:
             current_score = root_mean_squared_error(param_combination_results['observed'], param_combination_results['predicted'])
-            current_score = round(current_score, 2) if current_score is not None else None
 
-            if _is_marginal_improvement(current_score, best_param_score, min_improvement = min_score_improvement):
+            if _is_marginal_improvement(current_score, best_param_score, min_improvement = min_relative_score_improvement):
                 logger.debug("Setting best score from %s to %s", best_param_score, current_score)
                 best_param_score = current_score
                 stalled_steps = 0
