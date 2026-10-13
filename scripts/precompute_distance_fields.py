@@ -3,10 +3,6 @@ import asyncio
 import logging
 from datetime import datetime
 
-from src.coordinator import (
-    DistanceFieldPrecomputeRequest,
-    InterpolationCoordinator,
-)
 from src.runtime import RuntimeContext
 
 logger = logging.getLogger(__name__)
@@ -21,12 +17,6 @@ async def _main() -> None:
         "--config",
         default="config.yaml",
         help="Path to configuration file.",
-    )
-    parser.add_argument(
-        "--stations",
-        nargs="+",
-        default=None,
-        help="Optional station IDs to precompute. Defaults to all configured stations inside the DEM.",
     )
     parser.add_argument(
         "-v",
@@ -49,15 +39,17 @@ async def _main() -> None:
     logger.info("=" * 50)
 
     runtime = await RuntimeContext.from_config_file(args.config)
-    coordinator = InterpolationCoordinator(runtime)
-    result = await coordinator.precompute_distance_fields(
-        DistanceFieldPrecomputeRequest(station_ids=args.stations)
-    )
+    if runtime.cache_manager is None:
+        raise ValueError("Distance field precomputation requires cache.enabled=true.")
 
-    sizes = result.distance_fields.data.sizes if result.distance_fields.data is not None else {}
+    distance_fields = runtime.distance_fields
+    if distance_fields is None:
+        distance_fields = runtime.build_distance_fields()
+
+    sizes = distance_fields.data.sizes if distance_fields.data is not None else {}
     logger.info(
         "Prepared distance fields for %s station(s) with sizes %s.",
-        result.n_sources,
+        len(runtime.station_ids),
         dict(sizes),
     )
 

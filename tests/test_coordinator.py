@@ -9,12 +9,10 @@ import pytest
 import xarray as xr
 from shapely.geometry import Point
 
-from src.coordinator import (
-    DistanceFieldPrecomputeRequest,
-    InterpolationCoordinator,
-)
+from src.coordinator import InterpolationCoordinator
 from src.interpolate import DistanceField
 from src.meteo.base import Station
+from src.runtime import RuntimeContext
 
 
 class _RecordingDistanceCalculator:
@@ -76,21 +74,21 @@ class _RecordingMeteoLoader:
         )
 
 
-def _coordinator(cache_manager=None):
+def _runtime_with_distance_calculator():
     station_catalog = gpd.GeoDataFrame(
         {"station_id": ["b", "a"]},
         geometry=[Point(1.0, 1.0), Point(0.0, 0.0)],
         crs=4326,
     ).set_index("station_id")
     distance_calculator = _RecordingDistanceCalculator()
-    context = SimpleNamespace(
-        station_ids=["b", "a"],
-        station_catalog=station_catalog,
-        distance_calculator=distance_calculator,
-        cache_manager=cache_manager,
-        dem=SimpleNamespace(crs=4326, data=xr.DataArray([[1.0]], dims=("y", "x"))),
+    runtime = RuntimeContext(config={})
+    runtime.station_catalog = station_catalog
+    runtime.distance_calculator = distance_calculator
+    runtime.dem = SimpleNamespace(
+        crs=4326,
+        data=xr.DataArray([[1.0]], dims=("y", "x")),
     )
-    return InterpolationCoordinator(context), distance_calculator
+    return runtime, distance_calculator
 
 
 def test_load_meteo_data_passes_request_timezone_and_sensor_codes():
@@ -118,32 +116,20 @@ def test_load_meteo_data_passes_request_timezone_and_sensor_codes():
     assert meteo_loader.calls[0]["sensor_codes"] == ["tair_2m"]
 
 
-def test_prepare_distance_fields_uses_stable_sorted_station_set():
-    coordinator, distance_calculator = _coordinator()
+def test_build_distance_fields_uses_stable_sorted_station_set():
+    runtime, distance_calculator = _runtime_with_distance_calculator()
 
-    coordinator._prepare_distance_fields(jobs=[object()])
+    distance_fields = runtime.build_distance_fields()
 
+    assert isinstance(distance_fields, DistanceField)
     assert distance_calculator.calls[0]["point_ids"] == ["a", "b"]
     assert distance_calculator.calls[0]["x_coords"] == [0.0, 1.0]
     assert distance_calculator.calls[0]["y_coords"] == [0.0, 1.0]
 
 
-def test_precompute_distance_fields_requires_cache_enabled():
-    coordinator, _ = _coordinator(cache_manager=None)
+def test_build_distance_fields_requires_a_distance_calculator():
+    runtime, _ = _runtime_with_distance_calculator()
+    runtime.distance_calculator = None
 
-    with pytest.raises(ValueError, match="cache.enabled=true"):
-        coordinator._calculate_stable_distance_fields(require_cache=True)
-
-
-def test_precompute_distance_fields_returns_requested_station_subset():
-    coordinator, distance_calculator = _coordinator(cache_manager=object())
-
-    result = asyncio.run(
-        coordinator.precompute_distance_fields(
-            DistanceFieldPrecomputeRequest(station_ids=["b"])
-        )
-    )
-
-    assert result.station_ids == ["b"]
-    assert result.n_sources == 1
-    assert distance_calculator.calls[0]["point_ids"] == ["b"]
+    with pytest.raises(ValueError, match="no distance calculator"):
+        runtime.build_distance_fields()

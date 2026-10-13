@@ -14,7 +14,7 @@ from .database.db import InterpolationDB
 from .datagaps import Gapfiller
 from .domain.dem import load_dem
 from .domain.schemas import _OBSERVATION_POINTS_SCHEMA
-from .interpolate import BaseDistanceCalculator, Interpolator
+from .interpolate import BaseDistanceCalculator, DistanceField, Interpolator
 from .interpolate.cv import validate_cross_validation_options
 from .meteo.base import BaseMeteoHandler
 from .resample import MeteoResampler
@@ -100,6 +100,28 @@ class RuntimeContext:
 
         return stations_in_dem
 
+    def build_distance_fields(self) -> DistanceField:
+        if self.distance_calculator is None:
+            raise ValueError("Distance fields required by configuration but no distance calculator provided")
+
+        station_catalog = self.station_catalog.sort_index().to_crs(
+            self.dem.crs
+        )
+        x_coords = station_catalog.geometry.x.astype(float).tolist()
+        y_coords = station_catalog.geometry.y.astype(float).tolist()
+
+        logger.info(
+            "Preparing distance fields for %s source station(s).",
+            len(station_catalog),
+        )
+
+        return self.distance_calculator.calculate_fields(
+            self.dem,
+            x_coords,
+            y_coords,
+            station_catalog.index,
+        )
+
     async def initialize_runtime(self, config: dict):
        
         ## Cache
@@ -172,6 +194,12 @@ class RuntimeContext:
                 raise ValueError(
                     "Cross validation is enabled but no distance calculator is configured."
                 )
+
+        ## Distance fields
+        self.distance_fields = None
+        distance_fields_required = self.cross_validation.enabled or self.interpolator.residual_model is not None
+        if distance_fields_required:
+            self.distance_fields = self.build_distance_fields()
 
         ## Grid Writer
         output_config = config.get('output')

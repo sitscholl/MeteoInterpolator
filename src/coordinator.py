@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from functools import partial
@@ -21,7 +20,7 @@ from .array.writer import GridWriter
 from .domain.meteo_data import MeteoData
 from .execute.base import JobExecutor
 from .execute.serial import SerialExecutor
-from .interpolate import DistanceField, InterpolationJob
+from .interpolate import InterpolationJob
 from .runtime import RuntimeContext
 from .utils import get_date_format_from_freq
 from .worker import InterpolationJobResult, process_interpolation_job
@@ -30,12 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 RunStatus = Literal["queued", "running", "completed", "failed"]
-BackgroundOperation = Literal["interpolation", "distance_precompute"]
-
-
-@dataclass(frozen=True)
-class DistanceFieldPrecomputeRequest:
-    station_ids: Sequence[str] | None = None
+BackgroundOperation = Literal["interpolation"]
 
 
 @dataclass(frozen=True)
@@ -53,7 +47,7 @@ class InterpolationRunResult:
 @dataclass(frozen=True)
 class InterpolationRunState:
     request_id: str
-    request: InterpolationRequest | DistanceFieldPrecomputeRequest
+    request: InterpolationRequest
     operation: BackgroundOperation
     status: RunStatus
     submitted_at: datetime
@@ -69,23 +63,10 @@ class InterpolationRunState:
 
 
 @dataclass(frozen=True)
-class DistanceFieldPrecomputeResult:
-    request_id: str
-    request: DistanceFieldPrecomputeRequest
-    distance_fields: DistanceField
-    station_ids: list[str]
-
-    @property
-    def n_sources(self) -> int:
-        return len(self.station_ids)
-
-
-@dataclass(frozen=True)
 class PreparedInterpolationRun:
     request: InterpolationRequest
     prediction_target: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame
     jobs: list[InterpolationJob]
-    distance_fields: DistanceField | None
     grid_writer: GridWriter | None
     target_freq: str
 
@@ -147,43 +128,6 @@ class InterpolationCoordinator:
         )
         return InterpolationSubmission(request_id=request_id, status="queued")
 
-    async def precompute_distance_fields(
-        self,
-        request: DistanceFieldPrecomputeRequest | None = None,
-        *,
-        request_id: str | None = None,
-    ) -> DistanceFieldPrecomputeResult:
-        request = request or DistanceFieldPrecomputeRequest()
-        request_id = request_id or str(uuid4())
-        distance_fields, station_ids = self._calculate_stable_distance_fields(
-            request.station_ids,
-            require_cache=True,
-        )
-        return DistanceFieldPrecomputeResult(
-            request_id=request_id,
-            request=request,
-            distance_fields=distance_fields,
-            station_ids=station_ids,
-        )
-
-    async def submit_distance_precompute(
-        self,
-        request: DistanceFieldPrecomputeRequest | None = None,
-    ) -> InterpolationSubmission:
-        request = request or DistanceFieldPrecomputeRequest()
-        request_id = str(uuid4())
-        self._runs[request_id] = InterpolationRunState(
-            request_id=request_id,
-            request=request,
-            operation="distance_precompute",
-            status="queued",
-            submitted_at=datetime.now(),
-        )
-        self._tasks[request_id] = asyncio.create_task(
-            self._run_submitted_distance_precompute(request_id, request)
-        )
-        return InterpolationSubmission(request_id=request_id, status="queued")
-
     def get_status(self, request_id: str) -> InterpolationRunState:
         try:
             return self._runs[request_id]
@@ -217,38 +161,6 @@ class InterpolationCoordinator:
             n_skipped=sum(1 for job_result in result.job_results if job_result.status == "skipped"),
             n_failed=sum(1 for job_result in result.job_results if job_result.status == "failed"),
             n_outputs=len(result.outputs),
-        )
-
-    async def _run_submitted_distance_precompute(
-        self,
-        request_id: str,
-        request: DistanceFieldPrecomputeRequest,
-    ) -> None:
-        self._runs[request_id] = self._replace_run_state(
-            request_id,
-            status="running",
-            started_at=datetime.now(),
-        )
-        try:
-            result = await self.precompute_distance_fields(
-                request,
-                request_id=request_id,
-            )
-        except Exception as exc:
-            logger.exception("Distance field precompute request %s failed", request_id)
-            self._runs[request_id] = self._replace_run_state(
-                request_id,
-                status="failed",
-                finished_at=datetime.now(),
-                error=str(exc),
-            )
-            return
-
-        self._runs[request_id] = self._replace_run_state(
-            request_id,
-            status="completed",
-            finished_at=datetime.now(),
-            n_sources=result.n_sources,
         )
 
     def _replace_run_state(self, request_id: str, **changes) -> InterpolationRunState:
@@ -286,7 +198,6 @@ class InterpolationCoordinator:
         meteo_data = meteo_data.update_elevation(self.context.dem, overwrite=True)
 
         jobs = list(meteo_data.build_jobs(request.start, request.end, request.param))
-        distance_fields = self._prepare_distance_fields(jobs)
         grid_writer = (
             self.context.grid_writer.initialize(
                 param=request.param,
@@ -312,7 +223,6 @@ class InterpolationCoordinator:
             request=request,
             prediction_target=prediction_target,
             jobs=jobs,
-            distance_fields=distance_fields,
             grid_writer=grid_writer,
             target_freq=target_freq,
         )
@@ -323,7 +233,7 @@ class InterpolationCoordinator:
             interpolator=self.context.interpolator,
             cross_validation_config=self.context.cross_validation,
             prediction_target=prepared.prediction_target,
-            distance_fields=prepared.distance_fields,
+            distance_fields=self.context.distance_fields,
         )
         return list(self.executor.map(run_job, prepared.jobs))
 
@@ -508,74 +418,3 @@ class InterpolationCoordinator:
         logger.info("Loaded data for %s stations.", meteo_data.n_stations)
 
         return meteo_data
-
-    def _prepare_distance_fields(
-        self,
-        jobs: list[InterpolationJob],
-    ) -> DistanceField | None:
-        if self.context.distance_calculator is None:
-            return None
-        if not jobs:
-            return None
-        distance_fields, _ = self._calculate_stable_distance_fields(
-            self.context.station_ids
-        )
-
-        if not isinstance(distance_fields, DistanceField):
-            raise TypeError(f"Object of type DistanceField is required for interpolation. Got {type(distance_fields)}")
-
-        return distance_fields
-
-    def _calculate_stable_distance_fields(
-        self,
-        station_ids: Sequence[str] | None = None,
-        *,
-        require_cache: bool = False,
-    ) -> tuple[DistanceField, list[str]]:
-        distance_calculator = self.context.distance_calculator
-        if distance_calculator is None:
-            raise ValueError("No distance calculator is configured.")
-        if require_cache and self.context.cache_manager is None:
-            raise ValueError("Distance field precomputation requires cache.enabled=true.")
-
-        resolved_station_ids = self._resolve_distance_station_ids(station_ids)
-        station_catalog = self.context.station_catalog.loc[resolved_station_ids].to_crs(
-            self.context.dem.crs
-        )
-        x_coords = station_catalog.geometry.x.astype(float).tolist()
-        y_coords = station_catalog.geometry.y.astype(float).tolist()
-
-        logger.info(
-            "Preparing distance fields for %s stable source station(s).",
-            len(resolved_station_ids),
-        )
-        distance_fields = distance_calculator.calculate_fields(
-            self.context.dem,
-            x_coords,
-            y_coords,
-            resolved_station_ids,
-        )
-        return distance_fields, resolved_station_ids
-
-    def _resolve_distance_station_ids(
-        self,
-        station_ids: Sequence[str] | None,
-    ) -> list[str]:
-        configured_station_ids = {
-            str(station_id) for station_id in self.context.station_catalog.index
-        }
-        requested_station_ids = (
-            configured_station_ids
-            if station_ids is None
-            else {str(station_id) for station_id in station_ids}
-        )
-        missing_station_ids = sorted(requested_station_ids - configured_station_ids)
-        if missing_station_ids:
-            raise ValueError(
-                "Cannot prepare distance fields for unknown station ids: "
-                f"{missing_station_ids}"
-            )
-        resolved_station_ids = sorted(requested_station_ids)
-        if not resolved_station_ids:
-            raise ValueError("At least one station id is required to prepare distance fields.")
-        return resolved_station_ids
