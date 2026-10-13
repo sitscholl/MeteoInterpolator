@@ -43,7 +43,7 @@ interpolation:
 
 cross_validation:
   enabled: true
-  #n_splits: 10
+  n_splits: 10
   min_relative_score_improvement: 0.05
   improvement_latency_steps: 3
   param_grid:
