@@ -1,12 +1,18 @@
+import asyncio
 import inspect
+import logging
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from ..domain.schemas import _STATION_DATA_SCHEMA
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -49,6 +55,9 @@ class BaseMeteoHandler(ABC):
     """
 
     registry: dict[str, type["BaseMeteoHandler"]] = {}
+    def __init__(self) -> None:
+        self._sensor_catalogue: dict[str, list[str]] = {}
+        self._batch_lock = asyncio.Lock()
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -175,3 +184,73 @@ class BaseMeteoHandler(ABC):
             crs = metadata.get('crs'),
             data = transformed_data,
         )
+
+    async def get_data_for_stations(
+        self,
+        station_ids: str | Sequence[str],
+        sensor_codes: str | Sequence[str],
+        start: datetime,
+        end: datetime,
+        target_timezone: ZoneInfo,
+    ) -> list[Station]:
+        """Load data for configured stations that provide a requested sensor.
+        """
+        requested_stations = {str(station_id) for station_id in ([station_ids] if isinstance(station_ids, str) else station_ids)}
+        requested_sensors = [sensor_codes] if isinstance(sensor_codes, str) else list(sensor_codes)
+        if not requested_stations:
+            raise ValueError("At least one station_id is required.")
+        if not requested_sensors:
+            raise ValueError("At least one sensor code is required.")
+
+        max_concurrent_requests = getattr(self, "max_concurrent_requests", 3)
+        if not isinstance(max_concurrent_requests, int) or max_concurrent_requests < 1:
+            raise ValueError(
+                "max_concurrent_requests must be an integer greater than 0. "
+                f"Got {max_concurrent_requests}"
+            )
+
+        async with self._batch_lock:
+            async with self as meteo_loader:
+                uncached_sensors = [
+                    sensor
+                    for sensor in requested_sensors
+                    if sensor not in self._sensor_catalogue
+                ]
+                if uncached_sensors:
+                    new_catalogue_entries = await meteo_loader.get_stations_for_sensors(
+                        uncached_sensors
+                    )
+                    if new_catalogue_entries:
+                        self._sensor_catalogue.update(new_catalogue_entries)
+
+                stations_with_sensors = {
+                    station
+                    for sensor, station_ids in self._sensor_catalogue.items()
+                    if sensor in requested_sensors
+                    for station in station_ids
+                }
+
+                valid_stations = sorted(stations_with_sensors.intersection(requested_stations))
+                if not valid_stations:
+                    raise ValueError(
+                        f"Found no stations for sensors {requested_sensors} within the "
+                        f"{len(requested_stations)} requested stations."
+                    )
+
+                logger.info("Requesting data for %s stations.", len(valid_stations))
+
+                semaphore = asyncio.Semaphore(max_concurrent_requests)
+
+                async def load_station(station_id: str):
+                    async with semaphore:
+                        return await meteo_loader.get_data(
+                            station_id=station_id,
+                            start=start,
+                            end=end,
+                            sensor_codes=requested_sensors,
+                            target_timezone=target_timezone
+                        )
+
+                return await asyncio.gather(
+                    *(load_station(station_id) for station_id in valid_stations)
+                )

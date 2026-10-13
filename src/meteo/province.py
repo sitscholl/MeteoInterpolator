@@ -31,6 +31,7 @@ class ProvinceAPI(BaseMeteoHandler):
             sleep_time: int = 1,
             **kwargs
         ):
+        super().__init__()
         self.timezone = "Europe/Rome"
         self.chunk_size_days = chunk_size_days
         self.timeout = timeout

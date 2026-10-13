@@ -72,76 +72,8 @@ class InterpolationCoordinator:
     executor: JobExecutor = field(default_factory=SerialExecutor)
 
     def __post_init__(self) -> None:
-        self._sensor_catalogue: dict[str, list[str]] = {}
-        self._sensor_catalogue_lock = asyncio.Lock()
         self._runs: dict[str, InterpolationRunState] = {}
         self._tasks: dict[str, asyncio.Task] = {}
-
-    async def _load_meteo_data(
-        self,
-        stations: str | list[str],
-        start,
-        end,
-        tzinfo: ZoneInfo,
-        sensor_codes: str | list[str],
-    ) -> MeteoData:
-        if isinstance(stations, str):
-            stations = [stations]
-        if isinstance(sensor_codes, str):
-            sensor_codes = [sensor_codes]
-
-        requested_stations = set(stations)
-        async with self._sensor_catalogue_lock:
-            uncached_sensors = [
-                sensor for sensor in sensor_codes if sensor not in self._sensor_catalogue
-            ]
-
-            async with self.context.meteo_loader as meteo_loader:
-                if uncached_sensors:
-                    new_catalogue_entries = await meteo_loader.get_stations_for_sensors(
-                        uncached_sensors
-                    )
-                    if new_catalogue_entries:
-                        self._sensor_catalogue.update(new_catalogue_entries)
-
-                stations_with_sensors = {
-                    station
-                    for sensor, station_ids in self._sensor_catalogue.items()
-                    for station in station_ids
-                    if sensor in sensor_codes
-                }
-
-                valid_stations = sorted(stations_with_sensors.intersection(requested_stations))
-                if not valid_stations:
-                    raise ValueError(
-                        f"Found no stations for sensors {sensor_codes} within the "
-                        f"{len(requested_stations)} requested stations."
-                    )
-
-                logger.info("Requesting data for %s stations.", len(valid_stations))
-
-                semaphore = asyncio.Semaphore(3)
-
-                async def load_station(station_id: str):
-                    async with semaphore:
-                        return await meteo_loader.get_data(
-                            station_id=station_id,
-                            start=start,
-                            end=end,
-                            sensor_codes=sensor_codes,
-                            target_timezone=tzinfo
-                        )
-
-                tasks = [asyncio.create_task(load_station(st)) for st in valid_stations]
-                station_data = await asyncio.gather(*tasks)
-
-        meteo_data = MeteoData.from_list(station_data)
-
-        if meteo_data.n_stations == 0:
-            raise ValueError("Could not load data for any station.")
-        logger.info("Loaded data for %s stations.", meteo_data.n_stations)
-
-        return meteo_data
 
     async def _prepare_request(self, request: InterpolationRequest) -> PreparedInterpolationRun:
         self._validate_dates(request.start, request.end)
@@ -152,13 +84,19 @@ class InterpolationCoordinator:
             else prediction_target.attrs["crs"]
         )
 
-        meteo_data = await self._load_meteo_data(
-            self.context.station_ids,
-            request.start,
-            request.end,
-            request.tzinfo,
-            request.param,
+        stations = await self.context.meteo_loader.get_data_for_stations(
+            station_ids=self.context.station_ids,
+            sensor_codes=[request.param],
+            start=request.start,
+            end=request.end,
+            target_timezone=request.tzinfo,
         )
+        meteo_data = MeteoData.from_list(stations)
+
+        if meteo_data.n_stations == 0:
+            raise ValueError("Could not load data for any station.")
+        logger.info("Loaded data for %s stations.", meteo_data.n_stations)
+
         meteo_data = meteo_data.to_crs(target_crs)
 
         if self.context.gapfiller is not None:

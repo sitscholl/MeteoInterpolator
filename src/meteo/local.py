@@ -22,6 +22,7 @@ class LocalFileMeteoHandler(BaseMeteoHandler):
         timezone: str | ZoneInfo,
         **kwargs,
     ):
+        super().__init__()
         self.timezone = timezone if isinstance(timezone, ZoneInfo) else ZoneInfo(timezone)
         self.observations_path = observations_path
         self.station_metadata_path = station_metadata_path
