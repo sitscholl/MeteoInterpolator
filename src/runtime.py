@@ -3,7 +3,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import geopandas as gpd
-import numpy as np
 import yaml
 from pyproj import CRS
 from shapely.geometry import Point
@@ -16,6 +15,7 @@ from .datagaps import Gapfiller
 from .domain.dem import load_dem
 from .domain.schemas import _OBSERVATION_POINTS_SCHEMA
 from .interpolate import BaseDistanceCalculator, Interpolator
+from .interpolate.cv import validate_cross_validation_options
 from .meteo.base import BaseMeteoHandler
 from .resample import MeteoResampler
 
@@ -42,18 +42,13 @@ class CrossValidationConfig:
 
     def __post_init__(self):
         if self.enabled:
-            if len(self.param_grid) == 0:
-                raise ValueError("Param grid cannot be empty when cross validation is enabled. Please pass a grid of parameters via the config file.")
-       
-            if len(self.param_grid.keys()) > 1 or 'lam_value' not in list(self.param_grid.keys()):
-                raise NotImplementedError(f"Currently cross validation parameter grid can only contain a single parameter named lam_value. Got {self.param_grid.keys()}")
-            if len(self.param_grid['lam_value']) == 0:
-                raise ValueError("Parameter grid for lam values cannot be empty")
-            if self.improvement_latency_steps < 1 or not np.isfinite(self.improvement_latency_steps):
-                raise ValueError(f"improvement_latency_steps arguments must be greater than 0. Got {self.improvement_latency_steps}")
-            if self.min_relative_score_improvement is not None and self.min_relative_score_improvement < 0:
-                raise ValueError(f"Min relative score improvement must be greater than 0 or None. Got {self.min_relative_score_improvement}")
-            
+            validate_cross_validation_options(
+                param_grid=self.param_grid,
+                n_splits=self.n_splits,
+                min_relative_score_improvement=self.min_relative_score_improvement,
+                improvement_latency_steps=self.improvement_latency_steps,
+                metric=self.select_by,
+            )
 
 @dataclass
 class RuntimeContext:

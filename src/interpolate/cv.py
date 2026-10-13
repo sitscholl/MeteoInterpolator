@@ -1,6 +1,8 @@
 import logging
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from numbers import Integral, Real
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -17,6 +19,63 @@ _SCORING_FUNCTIONS = {
     'rmse': root_mean_squared_error,
     'mae': mean_absolute_error
 }
+
+
+def validate_cross_validation_options(
+    *,
+    param_grid: Mapping[str, Sequence[Any]],
+    n_splits: int | None,
+    min_relative_score_improvement: float | None,
+    improvement_latency_steps: int,
+    metric: str,
+) -> str:
+    """Validate cross-validation options and return a normalized metric name."""
+    if not isinstance(param_grid, Mapping) or set(param_grid) != {"lam_value"}:
+        keys = param_grid.keys() if isinstance(param_grid, Mapping) else type(param_grid)
+        raise ValueError(
+            "Cross-validation parameter grid must contain exactly one parameter named "
+            f"'lam_value'. Got {keys}"
+        )
+
+    lam_values = param_grid["lam_value"]
+    if isinstance(lam_values, (str, bytes)) or not isinstance(lam_values, Sequence):
+        raise TypeError("Parameter grid for lam_value must be a sequence of numeric values")
+    if not lam_values:
+        raise ValueError("Parameter grid for lam_value cannot be empty")
+    if any(not isinstance(value, Real) or not np.isfinite(value) for value in lam_values):
+        raise ValueError("Parameter grid for lam_value must contain only finite numeric values")
+
+    if n_splits is not None and (
+        isinstance(n_splits, bool) or not isinstance(n_splits, Integral) or n_splits < 2
+    ):
+        raise ValueError(f"n_splits must be an integer greater than or equal to 2. Got {n_splits}")
+    if (
+        isinstance(improvement_latency_steps, bool)
+        or not isinstance(improvement_latency_steps, Integral)
+        or improvement_latency_steps < 1
+    ):
+        raise ValueError(
+            "improvement_latency_steps must be an integer greater than 0. "
+            f"Got {improvement_latency_steps}"
+        )
+    if min_relative_score_improvement is not None and (
+        not isinstance(min_relative_score_improvement, Real)
+        or not np.isfinite(min_relative_score_improvement)
+        or min_relative_score_improvement < 0
+    ):
+        raise ValueError(
+            "min_relative_score_improvement must be a finite value greater than or "
+            f"equal to 0, or None. Got {min_relative_score_improvement}"
+        )
+    if not isinstance(metric, str):
+        raise TypeError(f"metric must be a string. Got {type(metric)}")
+
+    normalized_metric = metric.lower()
+    if normalized_metric not in _SCORING_FUNCTIONS:
+        raise ValueError(
+            f"Unknown metric {metric}. Choose one of {_SCORING_FUNCTIONS.keys()}"
+        )
+    return normalized_metric
 
 def _point_distances(
     distance_fields: DistanceField,
@@ -103,15 +162,20 @@ def cross_validate(
     metric: str = 'rmse',
 ):
 
+    metric = validate_cross_validation_options(
+        param_grid=param_grid,
+        n_splits=n_splits,
+        min_relative_score_improvement=min_relative_score_improvement,
+        improvement_latency_steps=improvement_latency_steps,
+        metric=metric,
+    )
+
     if not isinstance(distance_fields, DistanceField):
         raise TypeError(f"Distance fields must be of type DistanceField. Got {type(distance_fields)}")
     if estimator.residual_model is None:
         raise ValueError("Cross validation requires a residual model")
 
-    metric = metric.lower()
-    scoring_function = _SCORING_FUNCTIONS.get(metric)
-    if scoring_function is None:
-        raise ValueError(f"Unknown metric {metric}. Choose one of {_SCORING_FUNCTIONS.keys()}")
+    scoring_function = _SCORING_FUNCTIONS[metric]
 
     observations = job.observations.reset_index(drop=True)
     point_distances = _point_distances(distance_fields, observations)

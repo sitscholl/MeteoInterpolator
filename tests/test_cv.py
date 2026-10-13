@@ -1,20 +1,16 @@
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import pytest
 import geopandas as gpd
-import rioxarray  # noqa: F401
 import xarray as xr
 from shapely.geometry import Point
 
-from src.array.cache import CacheManager
-from src.domain.dem import DEM
 from src.interpolate import cross_validate
 from src.interpolate.distance import DistanceField
 from src.interpolate.idw import InverseDistanceWeighting
 from src.interpolate.interpolator import InterpolationJob, Interpolator
 from src.interpolate.vertical import LinearVerticalModel
+from src.runtime import CrossValidationConfig
 
 
 def _lambda_search_fixture():
@@ -75,14 +71,6 @@ def _lambda_search_fixture():
     return interpolator, _job(observations), distances
 
 
-def _dem(data: xr.DataArray) -> DEM:
-    return DEM(
-        path=Path("memory"),
-        data=data,
-        fingerprint=CacheManager.array_fingerprint(data),
-    )
-
-
 def _job(observations: pd.DataFrame) -> InterpolationJob:
     training_points = gpd.GeoDataFrame(
         observations[["station_id", "elevation"]].copy(),
@@ -98,11 +86,6 @@ def _job(observations: pd.DataFrame) -> InterpolationJob:
 
 
 def test_cross_validate_selects_best_lambda_from_leave_one_out():
-    grid = xr.DataArray(
-        [[0.0, 0.0, 0.0, 0.0]],
-        dims=("y", "x"),
-        coords={"y": [0.0], "x": [0.0, 1.0, 2.0, 3.0]},
-    ).rio.write_crs(4326)
     observations = pd.DataFrame(
         {
             "station_id": ["a", "b", "c", "d"],
@@ -153,16 +136,17 @@ def test_cross_validate_selects_best_lambda_from_leave_one_out():
         interpolator,
         _job(observations),
         distance_fields=distances,
-        scoring=["mae", "rmse"],
-        scopes=["overall"],
-        param_grid={"lambda": [0, 1]},
-        refit_vertical_per_fold=False,
+        param_grid={"lam_value": [0, 1]},
+        metric="rmse",
     )
 
-    assert result.best_params == {"lambda": 1}
-    assert result.best_score == pytest.approx(0.0)
+    best_params, best_score = result.get_best_parameters()
+
+    assert best_params == {"lam_value": 1}
+    assert best_score == pytest.approx(0.0)
+    assert result.selection_metric == "rmse"
     assert len(result.fold_results) == 8
-    assert set(result.summary["lambda"].tolist()) == {0, 1}
+    assert set(result.fold_results["lam_value"].tolist()) == {0, 1}
 
 
 def test_cross_validate_stops_lambda_search_when_improvement_is_below_threshold():
@@ -172,17 +156,17 @@ def test_cross_validate_stops_lambda_search_when_improvement_is_below_threshold(
         interpolator,
         job,
         distance_fields=distances,
-        scopes=["overall"],
-        param_grid={"lambda": [0, 1, 2, 3]},
-        min_lambda_improvement=0.6,
-        lambda_improvement_patience=1,
+        param_grid={"lam_value": [0, 1, 2, 3]},
+        min_relative_score_improvement=0.6,
+        improvement_latency_steps=1,
     )
 
-    assert result.early_stopped is True
-    assert result.best_params == {"lambda": 0}
-    assert result.best_score == pytest.approx(10.0)
-    assert [params["lambda"] for params in result.evaluated_params] == [0, 1]
-    assert set(result.summary["lambda"].tolist()) == {0, 1}
+    best_params, best_score = result.get_best_parameters()
+
+    assert result.search_stopped is True
+    assert best_params == {"lam_value": 0}
+    assert best_score == pytest.approx(10.0)
+    assert set(result.fold_results["lam_value"].tolist()) == {0, 1}
 
 
 def test_cross_validate_lambda_search_patience_allows_later_improvement():
@@ -192,47 +176,35 @@ def test_cross_validate_lambda_search_patience_allows_later_improvement():
         interpolator,
         job,
         distance_fields=distances,
-        scopes=["overall"],
-        param_grid={"lambda": [0, 1, 2, 3]},
-        min_lambda_improvement=0.6,
-        lambda_improvement_patience=2,
+        param_grid={"lam_value": [0, 1, 2, 3]},
+        min_relative_score_improvement=0.6,
+        improvement_latency_steps=2,
     )
 
-    assert result.early_stopped is False
-    assert result.best_params == {"lambda": 2}
-    assert result.best_score == pytest.approx(0.0)
-    assert [params["lambda"] for params in result.evaluated_params] == [0, 1, 2, 3]
+    best_params, best_score = result.get_best_parameters()
+
+    assert result.search_stopped is False
+    assert best_params == {"lam_value": 2}
+    assert best_score == pytest.approx(0.0)
+    assert set(result.fold_results["lam_value"].tolist()) == {0, 1, 2, 3}
 
 
-def test_cross_validate_vertical_scope_without_distance_fields():
-    grid = xr.DataArray(
-        [[0.0, 1.0, 2.0]],
-        dims=("y", "x"),
-        coords={"y": [0.0], "x": [0.0, 1.0, 2.0]},
-    ).rio.write_crs(4326)
-    observations = pd.DataFrame(
-        {
-            "station_id": ["a", "b", "c"],
-            "elevation": [0.0, 1.0, 2.0],
-            "x": [0.0, 1.0, 2.0],
-            "y": [0.0, 0.0, 0.0],
-            "tair_2m": [0.0, 1.0, 2.0],
-        }
-    )
-    interpolator = Interpolator(
-        vertical_model=LinearVerticalModel(),
-        min_sample_size=2,
-    )
+def test_cross_validation_config_rejects_unknown_selection_metric():
+    with pytest.raises(ValueError, match="Unknown metric"):
+        CrossValidationConfig(
+            enabled=True,
+            param_grid={"lam_value": [0, 1]},
+            select_by="bias",
+        )
 
-    result = cross_validate(
-        interpolator,
-        _job(observations),
-        scoring="mae",
-        scopes=["vertical"],
-        select_scope="vertical",
-        refit_vertical_per_fold=True,
-    )
 
-    assert result.best_params == {}
-    assert result.best_score == pytest.approx(0.0)
-    assert result.fold_results["scope"].unique().tolist() == ["vertical"]
+def test_cross_validate_validates_its_public_options():
+    interpolator, job, distances = _lambda_search_fixture()
+
+    with pytest.raises(ValueError, match="exactly one parameter named 'lam_value'"):
+        cross_validate(
+            interpolator,
+            job,
+            distance_fields=distances,
+            param_grid={"lambda": [0, 1]},
+        )
