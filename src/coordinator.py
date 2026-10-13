@@ -29,7 +29,29 @@ logger = logging.getLogger(__name__)
 
 
 RunStatus = Literal["queued", "running", "completed", "failed"]
-BackgroundOperation = Literal["interpolation"]
+
+
+@dataclass(frozen=True)
+class PreparedInterpolationRun:
+    prediction_target: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame
+    jobs: list[InterpolationJob]
+    grid_writer: GridWriter | None
+
+
+@dataclass(frozen=True)
+class InterpolationRunState:
+    request_id: str
+    request: InterpolationRequest
+    status: RunStatus
+    submitted_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    n_jobs: int | None = None
+    n_completed: int | None = None
+    n_skipped: int | None = None
+    n_failed: int | None = None
+    n_outputs: int | None = None
+    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -44,33 +66,6 @@ class InterpolationRunResult:
         return "completed" if any(result.status == "completed" for result in self.job_results) else "failed"
 
 
-@dataclass(frozen=True)
-class InterpolationRunState:
-    request_id: str
-    request: InterpolationRequest
-    operation: BackgroundOperation
-    status: RunStatus
-    submitted_at: datetime
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
-    n_jobs: int | None = None
-    n_completed: int | None = None
-    n_skipped: int | None = None
-    n_failed: int | None = None
-    n_outputs: int | None = None
-    n_sources: int | None = None
-    error: str | None = None
-
-
-@dataclass(frozen=True)
-class PreparedInterpolationRun:
-    request: InterpolationRequest
-    prediction_target: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame
-    jobs: list[InterpolationJob]
-    grid_writer: GridWriter | None
-    target_freq: str
-
-
 @dataclass
 class InterpolationCoordinator:
     context: RuntimeContext
@@ -82,89 +77,71 @@ class InterpolationCoordinator:
         self._runs: dict[str, InterpolationRunState] = {}
         self._tasks: dict[str, asyncio.Task] = {}
 
-    async def run(
+    async def _load_meteo_data(
         self,
-        request: InterpolationRequest,
-        *,
-        request_id: str | None = None,
-    ) -> InterpolationRunResult:
+        stations: str | list[str],
+        start,
+        end,
+        tzinfo: ZoneInfo,
+        sensor_codes: str | list[str],
+    ) -> MeteoData:
+        if isinstance(stations, str):
+            stations = [stations]
+        if isinstance(sensor_codes, str):
+            sensor_codes = [sensor_codes]
 
-        ##TODO: InterpolationRequest.target_points data type changed. Implement support for new input structure
-        if request.param != 'tair_2m':
-            raise NotImplementedError(f"Interpolation is currently only implemented for parameter 'tair_2m'. Got {request.param}")
+        requested_stations = set(stations)
+        async with self._sensor_catalogue_lock:
+            uncached_sensors = [
+                sensor for sensor in sensor_codes if sensor not in self._sensor_catalogue
+            ]
 
-        request_id = request_id or str(uuid4())
-        prepared = await self._prepare_request(request)
-        job_results = self._submit_jobs(prepared)
+            async with self.context.meteo_loader as meteo_loader:
+                if uncached_sensors:
+                    new_catalogue_entries = await meteo_loader.get_stations_for_sensors(
+                        uncached_sensors
+                    )
+                    if new_catalogue_entries:
+                        self._sensor_catalogue.update(new_catalogue_entries)
 
-        outputs: list[xr.Dataset | xr.DataArray] = []
-        for job_result in job_results:
-            outputs.extend(self._finalize_job(job_result, prepared.grid_writer))
+                stations_with_sensors = {
+                    station
+                    for sensor, station_ids in self._sensor_catalogue.items()
+                    for station in station_ids
+                    if sensor in sensor_codes
+                }
 
-        if not any(result.status == "completed" for result in job_results):
-            raise ValueError(
-                "No interpolation results were produced for parameter "
-                f"{request.param} over period {request.start} - {request.end}."
-            )
+                valid_stations = sorted(stations_with_sensors.intersection(requested_stations))
+                if not valid_stations:
+                    raise ValueError(
+                        f"Found no stations for sensors {sensor_codes} within the "
+                        f"{len(requested_stations)} requested stations."
+                    )
 
-        return InterpolationRunResult(
-            request_id=request_id,
-            request=request,
-            job_results=job_results,
-            outputs=outputs,
-        )
+                logger.info("Requesting data for %s stations.", len(valid_stations))
 
-    async def submit(self, request: InterpolationRequest) -> InterpolationSubmission:
-        request_id = str(uuid4())
-        self._runs[request_id] = InterpolationRunState(
-            request_id=request_id,
-            request=request,
-            operation="interpolation",
-            status="queued",
-            submitted_at=datetime.now(),
-        )
-        self._tasks[request_id] = asyncio.create_task(
-            self._run_submitted(request_id, request)
-        )
-        return InterpolationSubmission(request_id=request_id, status="queued")
+                semaphore = asyncio.Semaphore(3)
 
-    def get_status(self, request_id: str) -> InterpolationRunState:
-        try:
-            return self._runs[request_id]
-        except KeyError as exc:
-            raise KeyError(f"Unknown interpolation request_id: {request_id}") from exc
+                async def load_station(station_id: str):
+                    async with semaphore:
+                        return await meteo_loader.get_data(
+                            station_id=station_id,
+                            start=start,
+                            end=end,
+                            sensor_codes=sensor_codes,
+                            target_timezone=tzinfo
+                        )
 
-    async def _run_submitted(self, request_id: str, request: InterpolationRequest) -> None:
-        self._runs[request_id] = self._replace_run_state(
-            request_id,
-            status="running",
-            started_at=datetime.now(),
-        )
-        try:
-            result = await self.run(request, request_id=request_id)
-        except Exception as exc:
-            logger.exception("Interpolation request %s failed", request_id)
-            self._runs[request_id] = self._replace_run_state(
-                request_id,
-                status="failed",
-                finished_at=datetime.now(),
-                error=str(exc),
-            )
-            return
+                tasks = [asyncio.create_task(load_station(st)) for st in valid_stations]
+                station_data = await asyncio.gather(*tasks)
 
-        self._runs[request_id] = self._replace_run_state(
-            request_id,
-            status=result.status,
-            finished_at=datetime.now(),
-            n_jobs=len(result.job_results),
-            n_completed=sum(1 for job_result in result.job_results if job_result.status == "completed"),
-            n_skipped=sum(1 for job_result in result.job_results if job_result.status == "skipped"),
-            n_failed=sum(1 for job_result in result.job_results if job_result.status == "failed"),
-            n_outputs=len(result.outputs),
-        )
+        meteo_data = MeteoData.from_list(station_data)
 
-    def _replace_run_state(self, request_id: str, **changes) -> InterpolationRunState:
-        return replace(self.get_status(request_id), **changes)
+        if meteo_data.n_stations == 0:
+            raise ValueError("Could not load data for any station.")
+        logger.info("Loaded data for %s stations.", meteo_data.n_stations)
+
+        return meteo_data
 
     async def _prepare_request(self, request: InterpolationRequest) -> PreparedInterpolationRun:
         self._validate_dates(request.start, request.end)
@@ -220,22 +197,10 @@ class InterpolationCoordinator:
         )
 
         return PreparedInterpolationRun(
-            request=request,
             prediction_target=prediction_target,
             jobs=jobs,
             grid_writer=grid_writer,
-            target_freq=target_freq,
         )
-
-    def _submit_jobs(self, prepared: PreparedInterpolationRun) -> list[InterpolationJobResult]:
-        run_job = partial(
-            process_interpolation_job,
-            interpolator=self.context.interpolator,
-            cross_validation_config=self.context.cross_validation,
-            prediction_target=prepared.prediction_target,
-            distance_fields=self.context.distance_fields,
-        )
-        return list(self.executor.map(run_job, prepared.jobs))
 
     def _finalize_job(
         self,
@@ -275,6 +240,98 @@ class InterpolationCoordinator:
             )
 
         return outputs
+
+    async def run(
+        self,
+        request: InterpolationRequest,
+        request_id: str | None = None,
+    ) -> InterpolationRunResult:
+
+        ##TODO: InterpolationRequest.target_points data type changed. Implement support for new input structure
+        if request.param != 'tair_2m':
+            raise NotImplementedError(f"Interpolation is currently only implemented for parameter 'tair_2m'. Got {request.param}")
+
+        request_id = request_id or str(uuid4())
+        prepared = await self._prepare_request(request)
+        job_results = self._submit_jobs(prepared)
+
+        outputs: list[xr.Dataset | xr.DataArray] = []
+        for job_result in job_results:
+            outputs.extend(self._finalize_job(job_result, prepared.grid_writer))
+
+        if not any(result.status == "completed" for result in job_results):
+            raise ValueError(
+                "No interpolation results were produced for parameter "
+                f"{request.param} over period {request.start} - {request.end}."
+            )
+
+        return InterpolationRunResult(
+            request_id=request_id,
+            request=request,
+            job_results=job_results,
+            outputs=outputs,
+        )
+
+    async def submit(self, request: InterpolationRequest) -> InterpolationSubmission:
+        request_id = str(uuid4())
+        self._runs[request_id] = InterpolationRunState(
+            request_id=request_id,
+            request=request,
+            status="queued",
+            submitted_at=datetime.now(),
+        )
+        self._tasks[request_id] = asyncio.create_task(
+            self._run_submitted(request_id, request)
+        )
+        return InterpolationSubmission(request_id=request_id, status="queued")
+
+    def _submit_jobs(self, prepared: PreparedInterpolationRun) -> list[InterpolationJobResult]:
+        run_job = partial(
+            process_interpolation_job,
+            interpolator=self.context.interpolator,
+            cross_validation_config=self.context.cross_validation,
+            prediction_target=prepared.prediction_target,
+            distance_fields=self.context.distance_fields,
+        )
+        return list(self.executor.map(run_job, prepared.jobs))
+
+    def get_status(self, request_id: str) -> InterpolationRunState:
+        try:
+            return self._runs[request_id]
+        except KeyError as exc:
+            raise KeyError(f"Unknown interpolation request_id: {request_id}") from exc
+
+    async def _run_submitted(self, request_id: str, request: InterpolationRequest) -> None:
+        self._runs[request_id] = self._replace_run_state(
+            request_id,
+            status="running",
+            started_at=datetime.now(),
+        )
+        try:
+            result = await self.run(request, request_id=request_id)
+        except Exception as exc:
+            logger.exception("Interpolation request %s failed", request_id)
+            self._runs[request_id] = self._replace_run_state(
+                request_id,
+                status="failed",
+                finished_at=datetime.now(),
+                error=str(exc),
+            )
+            return
+
+        self._runs[request_id] = self._replace_run_state(
+            request_id,
+            status=result.status,
+            finished_at=datetime.now(),
+            n_jobs=len(result.job_results),
+            n_completed=sum(1 for job_result in result.job_results if job_result.status == "completed"),
+            n_skipped=sum(1 for job_result in result.job_results if job_result.status == "skipped"),
+            n_failed=sum(1 for job_result in result.job_results if job_result.status == "failed"),
+            n_outputs=len(result.outputs),
+        )
+
+    def _replace_run_state(self, request_id: str, **changes) -> InterpolationRunState:
+        return replace(self.get_status(request_id), **changes)
 
     def _validate_dates(self, start: datetime, end: datetime) -> None:
         if start >= end:
@@ -344,77 +401,3 @@ class InterpolationCoordinator:
 
         points.attrs["crs"] = dem_crs
         return points
-
-    def _check_station_sample_size(self, n_stations: int) -> None:
-        if n_stations < self.context.interpolator.min_sample_size:
-            raise ValueError(
-                f"Only {n_stations} available, interpolation requires {self.context.interpolator.min_sample_size}"
-            )
-
-    async def _load_meteo_data(
-        self,
-        stations: str | list[str],
-        start,
-        end,
-        tzinfo: ZoneInfo,
-        sensor_codes: str | list[str],
-    ) -> MeteoData:
-        if isinstance(stations, str):
-            stations = [stations]
-        if isinstance(sensor_codes, str):
-            sensor_codes = [sensor_codes]
-
-        requested_stations = set(stations)
-        async with self._sensor_catalogue_lock:
-            uncached_sensors = [
-                sensor for sensor in sensor_codes if sensor not in self._sensor_catalogue
-            ]
-
-            async with self.context.meteo_loader as meteo_loader:
-                if uncached_sensors:
-                    new_catalogue_entries = await meteo_loader.get_stations_for_sensors(
-                        uncached_sensors
-                    )
-                    if new_catalogue_entries:
-                        self._sensor_catalogue.update(new_catalogue_entries)
-
-                stations_with_sensors = {
-                    station
-                    for sensor, station_ids in self._sensor_catalogue.items()
-                    for station in station_ids
-                    if sensor in sensor_codes
-                }
-
-                valid_stations = sorted(stations_with_sensors.intersection(requested_stations))
-                if not valid_stations:
-                    raise ValueError(
-                        f"Found no stations for sensors {sensor_codes} within the "
-                        f"{len(requested_stations)} requested stations."
-                    )
-                self._check_station_sample_size(len(valid_stations))
-
-                logger.info("Requesting data for %s stations.", len(valid_stations))
-
-                semaphore = asyncio.Semaphore(3)
-
-                async def load_station(station_id: str):
-                    async with semaphore:
-                        return await meteo_loader.get_data(
-                            station_id=station_id,
-                            start=start,
-                            end=end,
-                            sensor_codes=sensor_codes,
-                            target_timezone=tzinfo
-                        )
-
-                tasks = [asyncio.create_task(load_station(st)) for st in valid_stations]
-                station_data = await asyncio.gather(*tasks)
-
-        meteo_data = MeteoData.from_list(station_data)
-
-        if meteo_data.n_stations == 0:
-            raise ValueError("Could not load data for any station.")
-        self._check_station_sample_size(meteo_data.n_stations)
-        logger.info("Loaded data for %s stations.", meteo_data.n_stations)
-
-        return meteo_data
