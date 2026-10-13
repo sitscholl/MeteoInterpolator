@@ -280,7 +280,7 @@ class Interpolator:
         model: FittedInterpolator,
         target_points: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame,
         distance_fields: DistanceField | xr.DataArray | None = None,
-        lam_value: float | int | None = None,
+        lam_value: float | None = None,
     ) -> InterpolationPrediction:
         if isinstance(target_points, xr.DataArray):
             self._check_prediction_crs(model, target_points)
@@ -299,7 +299,7 @@ class Interpolator:
         model: FittedInterpolator,
         grid: xr.DataArray,
         distance_fields: DistanceField | xr.DataArray | None = None,
-        lam_value: float | int | None = None,
+        lam_value: float | None = None,
     ) -> InterpolationPrediction:
         vertical_prediction = model.vertical_fit.predict(grid)
         prediction = vertical_prediction
