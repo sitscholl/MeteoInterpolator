@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from functools import partial
 from typing import Literal
@@ -252,25 +252,7 @@ class InterpolationCoordinator:
         )
 
     def _replace_run_state(self, request_id: str, **changes) -> InterpolationRunState:
-        current = self.get_status(request_id)
-        values = {
-            "request_id": current.request_id,
-            "request": current.request,
-            "operation": current.operation,
-            "status": current.status,
-            "submitted_at": current.submitted_at,
-            "started_at": current.started_at,
-            "finished_at": current.finished_at,
-            "n_jobs": current.n_jobs,
-            "n_completed": current.n_completed,
-            "n_skipped": current.n_skipped,
-            "n_failed": current.n_failed,
-            "n_outputs": current.n_outputs,
-            "n_sources": current.n_sources,
-            "error": current.error,
-        }
-        values.update(changes)
-        return InterpolationRunState(**values)
+        return replace(self.get_status(request_id), **changes)
 
     async def _prepare_request(self, request: InterpolationRequest) -> PreparedInterpolationRun:
         self._validate_dates(request.start, request.end)
