@@ -342,7 +342,7 @@ class Interpolator:
         model: FittedInterpolator,
         points: pd.DataFrame,
         distance_fields: DistanceField | xr.DataArray | None = None,
-        lam_value: float | int | None = None,
+        lam_value: float | None = None,
     ) -> InterpolationPrediction:
 
         point_X, x_coords, y_coords, ids = self._point_frame_to_arrays(points)
