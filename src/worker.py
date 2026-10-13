@@ -6,7 +6,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Literal, Any
 
-from .interpolate import Interpolator, CrossValidator, InterpolationJob, DistanceField, InterpolationPrediction, CrossValidationResult
+from .runtime import CrossValidationConfig
+from .interpolate import Interpolator, InterpolationJob, DistanceField, InterpolationPrediction, cross_validate, CrossValidationResult
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ class InterpolationJobResult:
 def process_interpolation_job(
     job: InterpolationJob,
     interpolator: Interpolator,
-    cross_validator: CrossValidator,
+    cross_validation_config: CrossValidationConfig,
     prediction_target: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame,
     distance_fields: DistanceField | xr.DataArray | None,
 ) -> InterpolationJobResult:
@@ -41,21 +42,30 @@ def process_interpolation_job(
         )
 
     try:
-        cv_result = cross_validator.cross_validate(
-            interpolator,
-            job,
-            distance_fields=distance_fields,
-        )
+        cv_result = None
+        best_params = {}
+        if cross_validation_config.enabled:
+            if distance_fields is None:
+                raise ValueError("Cross validation requires distance fields. Provide the distance fields or disable cross validation")
+            
+            cv_result = cross_validate(
+                estimator=interpolator,
+                job=job,
+                distance_fields=distance_fields,
+                param_grid=cross_validation_config.param_grid,
+                n_splits=cross_validation_config.n_splits,
+                min_relative_score_improvement=cross_validation_config.min_relative_score_improvement,
+                improvement_latency_steps=cross_validation_config.improvement_latency_steps,
+                metric=cross_validation_config.select_by
+            )
 
-        lam_value = None
-        if cv_result is not None:
-            lam_value = cv_result.best_params.get("lambda")
+            best_params, best_score = cv_result.get_best_parameters()
             logger.info(
                 "Cross-validation selected parameters for %s: %s (%s=%s)",
                 job,
-                cv_result.best_params,
-                cv_result.select_by,
-                cv_result.best_score,
+                best_params,
+                cross_validation_config.select_by,
+                best_score,
             )
 
         fitted = interpolator.fit(job)
@@ -63,7 +73,7 @@ def process_interpolation_job(
             fitted,
             prediction_target,
             distance_fields=distance_fields,
-            lam_value=lam_value,
+            **best_params,
         )
 
         return InterpolationJobResult(

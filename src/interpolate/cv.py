@@ -13,6 +13,11 @@ from .interpolator import InterpolationJob, Interpolator
 
 logger = logging.getLogger(__name__)
 
+_SCORING_FUNCTIONS = {
+    'rmse': root_mean_squared_error,
+    'mae': mean_absolute_error
+}
+
 def _point_distances(
     distance_fields: DistanceField,
     observations: pd.DataFrame,
@@ -49,11 +54,7 @@ class CrossValidationResult:
     param_grid: dict[str, list[Any]]
     n_splits: int
     search_stopped: bool
-
-    _score_fns: ClassVar = {
-            'rmse': root_mean_squared_error,
-            'mae': mean_absolute_error
-        }
+    selection_metric: str
 
     def __post_init__(self):
         required_cols = [*list(self.param_grid.keys()), 'observed', 'predicted']
@@ -65,15 +66,19 @@ class CrossValidationResult:
             if any(i is None for i in param_values):
                 raise ValueError("The parameter grid cannot contain None values for any parameter")
 
-    def calculate_fold_scores(self, metric: str = 'rmse'):
+    def calculate_fold_scores(self, metric: str | None = None):
 
-        score_fn = self._score_fns.get(metric)
+        if metric is None:
+            metric = self.selection_metric
+
+        score_fn = _SCORING_FUNCTIONS.get(metric)
         if score_fn is None:
-            raise ValueError(f"Unknown metric {metric}. Choose one of {self._score_fns.keys()}")
+            raise ValueError(f"Unknown metric {metric}. Choose one of {_SCORING_FUNCTIONS.keys()}")
 
         return self.fold_results.groupby(list(self.param_grid.keys())).apply(lambda x: score_fn(x['observed'], x['predicted']))
 
-    def get_best_parameters(self, metric: str = 'rmse'):
+    def get_best_parameters(self, metric: str | None = None):
+        
         fold_scores = self.calculate_fold_scores(metric)
         if fold_scores.empty:
             return {}, None
@@ -94,7 +99,8 @@ def cross_validate(
     distance_fields: DistanceField,
     n_splits: int | None = None, 
     min_relative_score_improvement: float | None = None,
-    improvement_latency_steps: int = 3
+    improvement_latency_steps: int = 3,
+    metric: str = 'rmse',
 ):
 
     if len(param_grid.keys()) > 1 or 'lam_value' not in list(param_grid.keys()):
@@ -107,6 +113,11 @@ def cross_validate(
         raise ValueError(f"Min relative score improvement must be greater than 0. Got {min_relative_score_improvement}")
     if not isinstance(distance_fields, DistanceField):
         raise TypeError(f"distance fields must be of type DistanceField. Got {type(distance_fields)}")
+
+    metric = metric.lower()
+    scoring_function = _SCORING_FUNCTIONS.get(metric)
+    if scoring_function is None:
+        raise ValueError(f"Unknown metric {metric}. Choose one of {_SCORING_FUNCTIONS.keys()}")
 
     observations = job.observations.reset_index(drop=True)
     point_distances = _point_distances(distance_fields, observations)
@@ -182,7 +193,7 @@ def cross_validate(
         if min_relative_score_improvement is None:
             continue
         else:
-            current_score = root_mean_squared_error(param_combination_results['observed'], param_combination_results['predicted'])
+            current_score = scoring_function(param_combination_results['observed'], param_combination_results['predicted'])
 
             if _is_marginal_improvement(current_score, best_param_score, min_improvement = min_relative_score_improvement):
                 logger.debug("Setting best score from %s to %s", best_param_score, current_score)
@@ -204,4 +215,5 @@ def cross_validate(
         param_grid = param_grid,
         n_splits = n_splits,
         search_stopped = search_stopped,
+        selection_metric = metric,
     )

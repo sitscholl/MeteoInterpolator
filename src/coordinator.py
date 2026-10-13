@@ -339,7 +339,7 @@ class InterpolationCoordinator:
         run_job = partial(
             process_interpolation_job,
             interpolator=self.context.interpolator,
-            cross_validator=self.context.cross_validator,
+            cross_validation_config=self.context.cross_validation,
             prediction_target=prepared.prediction_target,
             distance_fields=prepared.distance_fields,
         )

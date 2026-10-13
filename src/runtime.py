@@ -1,24 +1,22 @@
-import geopandas as gpd
-from shapely.geometry import Point
-from pyproj import CRS
-
-from pathlib import Path
-from dataclasses import dataclass, field
-import yaml
-
 import logging
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import geopandas as gpd
+import yaml
+from pyproj import CRS
+from shapely.geometry import Point
 
 from .aoi import AOI
-from .domain.dem import load_dem
 from .array.cache import CacheManager
-from .meteo.base import BaseMeteoHandler
-from .resample import MeteoResampler
-from .datagaps import Gapfiller
-from .interpolate import BaseDistanceCalculator
-from .interpolate import Interpolator, CrossValidator
 from .array.writer import GridWriter
 from .database.db import InterpolationDB
+from .datagaps import Gapfiller
+from .domain.dem import load_dem
 from .domain.schemas import _OBSERVATION_POINTS_SCHEMA
+from .interpolate import BaseDistanceCalculator, Interpolator
+from .meteo.base import BaseMeteoHandler
+from .resample import MeteoResampler
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +29,19 @@ def load_config_file(config_file: str | Path) -> dict:
         config = yaml.safe_load(f) or {}
 
     return config
+
+@dataclass(frozen=True)
+class CrossValidationConfig:
+    enabled: bool = False
+    param_grid: dict[str, list[float]] = field(default_factory=dict)
+    n_splits: int | None = None
+    min_relative_score_improvement: float | None = None
+    improvement_latency_steps: int = 3
+    select_by: str = 'rmse'
+
+    def __post_init__(self):
+        if self.enabled and len(self.param_grid) == 0:
+            raise ValueError("Param grid cannot be empty when cross validation is enabled. Please pass a grid of parameters via the config file.")
 
 @dataclass
 class RuntimeContext:
@@ -143,8 +154,7 @@ class RuntimeContext:
         self.interpolator = Interpolator.from_config(interpolation_config)
 
         ## Cross Validation
-        cv_config = config.get("cross_validation", {})
-        self.cross_validator = CrossValidator(**cv_config)
+        self.cross_validation = CrossValidationConfig(**config.get("cross_validation", {}))
 
         ## Grid Writer
         output_config = config.get('output')

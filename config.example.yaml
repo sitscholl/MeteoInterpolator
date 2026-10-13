@@ -43,21 +43,12 @@ interpolation:
 
 cross_validation:
   enabled: true
-  cv: loo
-  scoring: [mae, rmse, bias]
-  scopes: [overall]
-  refit_vertical_per_fold: false
-  select_by: mae
-  select_scope: overall
-  # Stop the lambda search after this relative score improvement stalls.
-  # A value of 0.10 means later lambdas must improve the selected score by at least 10%.
-  # Set to null or omit to evaluate every lambda.
-  min_lambda_improvement: 0.10
-  lambda_improvement_patience: 2
-  lambda_improvement_mode: relative
+  #n_splits: 10
+  min_relative_score_improvement: 0.05
+  improvement_latency_steps: 3
   param_grid:
-    lambda: [0, 25, 50, 75, 100, 125, 150, 175, 200]
-    #lambda: [100]
+    lam_value: [0, 25, 50, 75, 100, 125, 150, 175, 200]
+  select_by: rmse
 
 output:
   format: tiff
