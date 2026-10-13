@@ -11,7 +11,7 @@ from shapely.geometry import Point
 
 from src.coordinator import InterpolationCoordinator
 from src.interpolate import DistanceField
-from src.meteo.base import Station
+from src.meteo.base import BaseMeteoHandler, Station
 from src.runtime import RuntimeContext
 
 
@@ -42,19 +42,24 @@ class _RecordingDistanceCalculator:
         )
 
 
-class _RecordingMeteoLoader:
+class _RecordingMeteoLoader(BaseMeteoHandler):
     freq = "D"
+    inclusive = "left"
 
     def __init__(self):
         self.calls = []
+        self.sensor_calls = []
+        self.entered = 0
 
     async def __aenter__(self):
+        self.entered += 1
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         pass
 
     async def get_stations_for_sensors(self, sensors):
+        self.sensor_calls.append(list(sensors))
         return {sensor: ["a"] for sensor in sensors}
 
     async def get_data(self, **kwargs):
@@ -72,6 +77,19 @@ class _RecordingMeteoLoader:
                 }
             ),
         )
+
+    @classmethod
+    def name(cls):
+        return "recording"
+
+    async def get_station_info(self, station_id=None):
+        return {}
+
+    async def get_raw_data(self, **kwargs):
+        raise NotImplementedError
+
+    def transform(self, raw_data, target_timezone):
+        raise NotImplementedError
 
 
 def _runtime_with_distance_calculator():
@@ -91,27 +109,33 @@ def _runtime_with_distance_calculator():
     return runtime, distance_calculator
 
 
-def test_load_meteo_data_passes_request_timezone_and_sensor_codes():
+def test_handler_loads_supported_stations_with_cached_sensor_catalogue():
     meteo_loader = _RecordingMeteoLoader()
-    context = SimpleNamespace(
-        station_ids=["a"],
-        meteo_loader=meteo_loader,
-        interpolator=SimpleNamespace(min_sample_size=1),
-    )
-    coordinator = InterpolationCoordinator(context)
     tzinfo = ZoneInfo("Europe/Rome")
 
-    result = asyncio.run(
-        coordinator._load_meteo_data(
-            ["a"],
-            pd.Timestamp("2026-01-01", tz=tzinfo),
-            pd.Timestamp("2026-01-02", tz=tzinfo),
-            tzinfo,
-            "tair_2m",
+    async def load_twice():
+        first = await meteo_loader.get_data_for_stations(
+            station_ids=["a"],
+            sensor_codes=["tair_2m"],
+            start=pd.Timestamp("2026-01-01", tz=tzinfo),
+            end=pd.Timestamp("2026-01-02", tz=tzinfo),
+            target_timezone=tzinfo,
         )
-    )
+        second = await meteo_loader.get_data_for_stations(
+            station_ids=["a"],
+            sensor_codes=["tair_2m"],
+            start=pd.Timestamp("2026-01-01", tz=tzinfo),
+            end=pd.Timestamp("2026-01-02", tz=tzinfo),
+            target_timezone=tzinfo,
+        )
+        return first, second
 
-    assert result.n_stations == 1
+    first, second = asyncio.run(load_twice())
+
+    assert [station.id for station in first] == ["a"]
+    assert [station.id for station in second] == ["a"]
+    assert meteo_loader.sensor_calls == [["tair_2m"]]
+    assert meteo_loader.entered == 2
     assert meteo_loader.calls[0]["target_timezone"] is tzinfo
     assert meteo_loader.calls[0]["sensor_codes"] == ["tair_2m"]
 
