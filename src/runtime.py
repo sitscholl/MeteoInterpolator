@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
 import yaml
 from pyproj import CRS
 from shapely.geometry import Point
@@ -40,8 +41,19 @@ class CrossValidationConfig:
     select_by: str = 'rmse'
 
     def __post_init__(self):
-        if self.enabled and len(self.param_grid) == 0:
-            raise ValueError("Param grid cannot be empty when cross validation is enabled. Please pass a grid of parameters via the config file.")
+        if self.enabled:
+            if len(self.param_grid) == 0:
+                raise ValueError("Param grid cannot be empty when cross validation is enabled. Please pass a grid of parameters via the config file.")
+       
+            if len(self.param_grid.keys()) > 1 or 'lam_value' not in list(self.param_grid.keys()):
+                raise NotImplementedError(f"Currently cross validation parameter grid can only contain a single parameter named lam_value. Got {self.param_grid.keys()}")
+            if len(self.param_grid['lam_value']) == 0:
+                raise ValueError("Parameter grid for lam values cannot be empty")
+            if self.improvement_latency_steps < 1 or not np.isfinite(self.improvement_latency_steps):
+                raise ValueError(f"improvement_latency_steps arguments must be greater than 0. Got {self.improvement_latency_steps}")
+            if self.min_relative_score_improvement is not None and self.min_relative_score_improvement < 0:
+                raise ValueError(f"Min relative score improvement must be greater than 0 or None. Got {self.min_relative_score_improvement}")
+            
 
 @dataclass
 class RuntimeContext:
@@ -155,6 +167,16 @@ class RuntimeContext:
 
         ## Cross Validation
         self.cross_validation = CrossValidationConfig(**config.get("cross_validation", {}))
+        if self.cross_validation.enabled:
+            if self.interpolator.residual_model is None:
+                raise ValueError(
+                    "Cross validation tunes lam_value for residual interpolation, "
+                    "but no residual model is configured."
+                )
+            if self.distance_calculator is None:
+                raise ValueError(
+                    "Cross validation is enabled but no distance calculator is configured."
+                )
 
         ## Grid Writer
         output_config = config.get('output')

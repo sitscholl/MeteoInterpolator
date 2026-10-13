@@ -78,7 +78,7 @@ class CrossValidationResult:
         return self.fold_results.groupby(list(self.param_grid.keys())).apply(lambda x: score_fn(x['observed'], x['predicted']))
 
     def get_best_parameters(self, metric: str | None = None):
-        
+
         fold_scores = self.calculate_fold_scores(metric)
         if fold_scores.empty:
             return {}, None
@@ -103,16 +103,10 @@ def cross_validate(
     metric: str = 'rmse',
 ):
 
-    if len(param_grid.keys()) > 1 or 'lam_value' not in list(param_grid.keys()):
-        raise NotImplementedError(f"Currently cross validation parameter grid can only contain a single parameter named lam_value. Got {param_grid.keys()}")
-    if len(param_grid['lam_value']) == 0:
-        raise ValueError("Parameter grid for lam values cannot be empty")
-    if improvement_latency_steps < 1 or not np.isfinite(improvement_latency_steps):
-        raise ValueError(f"improvement_latency_steps arguments must be greater than 0. Got {improvement_latency_steps}")
-    if min_relative_score_improvement is not None and min_relative_score_improvement < 0:
-        raise ValueError(f"Min relative score improvement must be greater than 0. Got {min_relative_score_improvement}")
     if not isinstance(distance_fields, DistanceField):
-        raise TypeError(f"distance fields must be of type DistanceField. Got {type(distance_fields)}")
+        raise TypeError(f"Distance fields must be of type DistanceField. Got {type(distance_fields)}")
+    if estimator.residual_model is None:
+        raise ValueError("Cross validation requires a residual model")
 
     metric = metric.lower()
     scoring_function = _SCORING_FUNCTIONS.get(metric)

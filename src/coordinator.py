@@ -85,7 +85,7 @@ class PreparedInterpolationRun:
     request: InterpolationRequest
     prediction_target: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame
     jobs: list[InterpolationJob]
-    distance_fields: DistanceField | xr.DataArray | None
+    distance_fields: DistanceField | None
     grid_writer: GridWriter | None
     target_freq: str
 
@@ -530,7 +530,7 @@ class InterpolationCoordinator:
     def _prepare_distance_fields(
         self,
         jobs: list[InterpolationJob],
-    ) -> DistanceField | xr.DataArray | None:
+    ) -> DistanceField | None:
         if self.context.distance_calculator is None:
             return None
         if not jobs:
@@ -538,6 +538,10 @@ class InterpolationCoordinator:
         distance_fields, _ = self._calculate_stable_distance_fields(
             self.context.station_ids
         )
+
+        if not isinstance(distance_fields, DistanceField):
+            raise TypeError(f"Object of type DistanceField is required for interpolation. Got {type(distance_fields)}")
+
         return distance_fields
 
     def _calculate_stable_distance_fields(

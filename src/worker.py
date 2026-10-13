@@ -25,7 +25,7 @@ def process_interpolation_job(
     interpolator: Interpolator,
     cross_validation_config: CrossValidationConfig,
     prediction_target: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame,
-    distance_fields: DistanceField | xr.DataArray | None,
+    distance_fields: DistanceField | None,
 ) -> InterpolationJobResult:
     logger.info('Starting %s', job)
 
