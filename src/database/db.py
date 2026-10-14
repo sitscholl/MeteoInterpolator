@@ -1,12 +1,12 @@
 import logging
+import math
 from contextlib import contextmanager
-from datetime import datetime, timezone, UTC
+from datetime import datetime, UTC
 
 import pandas as pd
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
-from ..meteo.base import BaseMeteoHandler
 from . import models
 
 logger = logging.getLogger(__name__)
@@ -15,12 +15,58 @@ class InterpolationDB:
 
     def __init__(self, engine: str = 'sqlite:///db/database.db'):
         self.engine = create_engine(engine)
+        if self.engine.dialect.name == "sqlite":
+            event.listen(self.engine, "connect", self._enable_sqlite_foreign_keys)
         models.Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(
             bind=self.engine,
             autocommit=False,
             autoflush=False,
             expire_on_commit=False,
+        )
+
+    @staticmethod
+    def _enable_sqlite_foreign_keys(dbapi_connection, connection_record) -> None:
+        """Enable SQLite foreign-key enforcement for every pooled connection."""
+        dbapi_connection.execute("PRAGMA foreign_keys=ON")
+
+    @staticmethod
+    def _validate_station_coordinates(
+        latitude: float,
+        longitude: float,
+        elevation: float,
+    ) -> tuple[float, float, float]:
+        """Return finite station coordinates after validating their geographic bounds."""
+        values = {
+            "latitude": latitude,
+            "longitude": longitude,
+            "elevation": elevation,
+        }
+        numeric_values: dict[str, float] = {}
+        for field, value in values.items():
+            if value is None:
+                raise ValueError(f"Station {field} cannot be None.")
+            try:
+                numeric_value = float(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Station {field} must be a finite number. Got {value!r}"
+                ) from exc
+            if not math.isfinite(numeric_value):
+                raise ValueError(
+                    f"Station {field} must be a finite number. Got {value!r}"
+                )
+            numeric_values[field] = numeric_value
+
+        if not -90 <= numeric_values["latitude"] <= 90:
+            raise ValueError("Station latitude must be between -90 and 90 degrees.")
+        if not -180 <= numeric_values["longitude"] <= 180:
+            raise ValueError("Station longitude must be between -180 and 180 degrees.")
+
+        return (
+            numeric_values["latitude"],
+            numeric_values["longitude"],
+            numeric_values["elevation"],
         )
     
     @contextmanager
@@ -124,6 +170,12 @@ class InterpolationDB:
         if self.station_exists(id):
             raise ValueError(f"Station with id {id} already exists in the database")
 
+        latitude, longitude, elevation = self._validate_station_coordinates(
+            latitude,
+            longitude,
+            elevation,
+        )
+
         session = self.Session()
         try:
             new_station = models.Station(id = id, latitude = latitude, longitude = longitude, elevation = elevation, name = name)
@@ -169,6 +221,7 @@ class InterpolationDB:
                     changed = True
 
                 if changed:
+                    _ = self._validate_station_coordinates(station.latitude, station.longitude, station.elevation)
                     session.commit()
                     logger.info("Updated station metadata for station %s.", id)
                     session.refresh(station)
@@ -176,7 +229,7 @@ class InterpolationDB:
             except Exception as e:
                 session.rollback()
                 logger.exception("Error updating station metadata for station %s", id)
-                return None
+                raise
 
     def variable_exists(self, name: str):
         existing_variable = self.get_variables(name = name)
@@ -198,7 +251,7 @@ class InterpolationDB:
         except Exception as e: 
             session.rollback()
             logger.error(f"Error inserting new variable: {e}")
-            return
+            raise
         finally:
             session.close()
 
@@ -223,10 +276,19 @@ class InterpolationDB:
         data = data.copy()
         data["datetime"] = pd.to_datetime(data["datetime"], utc=True, errors='raise')
         if 'station_id' in data.columns:
-            data_id = str(data.station_id.unique().item())
+            station_ids = data["station_id"].dropna().astype(str).unique()
+            if len(station_ids) != 1:
+                raise ValueError(
+                    "Station data must contain exactly one non-null station_id. "
+                    f"Got {station_ids.tolist()}"
+                )
+            data_id = station_ids[0]
             if data_id != id:
-                raise ValueError(f"Station id in data does not match provided id. Got {data_id} vs {id}")
-            data.drop(['station_id'], inplace = True)
+                raise ValueError(
+                    "Station id in data does not match provided id. "
+                    f"Got {data_id} vs {id}"
+                )
+            data.drop(columns=["station_id"], inplace=True)
 
         variable_columns = [col for col in data.columns if col != 'datetime']
         if len(variable_columns) == 0:
@@ -250,8 +312,9 @@ class InterpolationDB:
             measurements['datetime'] = measurements['datetime'].dt.tz_convert('UTC')
 
         # Convert wide table (one column per variable) into long form for bulk insert
+        measurements['retrieved_at'] = pd.Timestamp.now(tz = "UTC")
         measurements = measurements.melt(
-            id_vars=['datetime'],
+            id_vars=['datetime', 'retrieved_at'],
             value_vars=active_variables,
             var_name='variable',
             value_name='value'
@@ -265,7 +328,7 @@ class InterpolationDB:
         measurements.drop(columns = ['variable'], inplace = True)
 
         # Ensure column order matches the measurements table definition
-        measurements = measurements[['station_id', 'variable_id', 'datetime', 'value']]
+        measurements = measurements[['station_id', 'variable_id', 'datetime', 'value', 'retrieved_at']]
 
         try:
             measurements.to_sql(
