@@ -323,11 +323,6 @@ class InterpolationDB:
         
         # Create table for database insertion
         measurements = data[['datetime'] + active_variables].copy()
-        measurements = measurements.drop_duplicates(
-            subset=["station_id", "variable_id", "datetime"],
-            keep="last",
-        )
-
         measurements['retrieved_at'] = pd.Timestamp.now(tz = "UTC")
         measurements = measurements.melt(
             id_vars=['datetime', 'retrieved_at'],
@@ -343,6 +338,10 @@ class InterpolationDB:
 
         # Ensure column order matches the measurements table definition
         measurements = measurements[['station_id', 'variable_id', 'datetime', 'value', 'retrieved_at']]
+        measurements = measurements.drop_duplicates(
+            subset=["station_id", "variable_id", "datetime"],
+            keep="last",
+        )
 
         try:
             with self.Session.begin() as session:
