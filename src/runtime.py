@@ -218,7 +218,7 @@ class RuntimeContext:
         if db_config is None:
             logger.info("No database configuration provided. Validation scores will not be persisted")
         else:
-            logger.info(f"Initialized database connection at {db_config['path']}")
+            logger.info(f"Initialized database connection at {db_config['engine']}")
         self.initialized = True
 
     async def update_runtime(self, config_file: str | Path):

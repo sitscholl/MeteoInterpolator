@@ -11,7 +11,7 @@ from . import models
 
 logger = logging.getLogger(__name__)
 
-class InterpDB:
+class InterpolationDB:
 
     def __init__(self, engine: str = 'sqlite:///db/database.db'):
         self.engine = create_engine(engine)
@@ -80,7 +80,10 @@ class InterpDB:
                     raise ValueError(f"Start and end timezone must be the same. Got {orig_timezone} vs {end_timezone}")
                  
                 end_time_utc = end_time.astimezone(UTC)
-                query = query.filter(models.Measurement.datetime.between(start_time_utc, end_time_utc))
+                query = query.filter(
+                    models.Measurement.datetime >= start_time_utc,
+                    models.Measurement.datetime < end_time_utc,
+                )
             else:
                 query = query.filter(models.Measurement.datetime >= start_time_utc)
 
@@ -100,14 +103,7 @@ class InterpDB:
             df = pd.read_sql_query(sql=query.statement, con=self.engine)
 
         if not df.empty:
-            try:
-                df['datetime'] = df['datetime'].dt.tz_localize(UTC).dt.tz_convert(orig_timezone)
-            except Exception as e:
-                logger.warning(f"Could not convert timezone back to {orig_timezone}: {e}. Keeping UTC timezone.")
-                # Ensure index is UTC-aware if conversion fails
-                if df['datetime'].tz is None:
-                    df['datetime'] = df['datetime'].tz_localize('UTC')
-
+            df["datetime"] = pd.to_datetime(df["datetime"], utc=True).dt.tz_convert(orig_timezone)
             df = df.pivot(columns = 'variable', values = 'value', index = ['station_id', 'datetime'])
             df.reset_index(inplace = True)
 
@@ -125,9 +121,6 @@ class InterpDB:
         elevation: float, 
         name: str | None = None, 
         ):
-        """
-        Add a new station to the database or update existing one
-        """
         if self.station_exists(id):
             raise ValueError(f"Station with id {id} already exists in the database")
 
@@ -141,8 +134,8 @@ class InterpDB:
             return new_station
         except Exception as e:
             session.rollback()
-            logger.error(f"Error inserting new station: {e}")
-            return
+            logger.exception("Error inserting new station with id %s", id)
+            raise
         finally:
             session.close()
 
@@ -153,39 +146,37 @@ class InterpDB:
         **kwargs,
     ):
 
-        stations = self.get_stations(id)
+        with self.session_scope() as session:
+            stations = session.query(models.Station).filter(models.Station.id == id).all()
 
-        if len(stations) == 0:
-            raise ValueError(f"No station with id {id} for exists.")
-        station = stations[0]
+            if len(stations) == 0:
+                raise ValueError(f"No station with id {id} for exists.")
+            station = stations[0]
 
-        allowed_fields = {"name", "latitude", "longitude", "elevation"}
-        invalid_fields = {k: v for k, v in kwargs if k not in allowed_fields}
-        if len(invalid_fields) > 0:
-            raise ValueError(f"Invalid fields in update_station: {invalid_fields.keys()}. Allowed fields: {allowed_fields}")
+            allowed_fields = {"name", "latitude", "longitude", "elevation"}
+            invalid_fields = {k: v for k, v in kwargs.items() if k not in allowed_fields}
+            if len(invalid_fields) > 0:
+                raise ValueError(f"Invalid fields in update_station: {invalid_fields.keys()}. Allowed fields: {allowed_fields}")
 
-        session = self.Session()
-        try:
-            changed = False
-            for key, value in kwargs.items():
-                if value is None:
-                    continue
-                if only_missing and getattr(station, key) is not None:
-                    continue
-                setattr(station, key, value)
-                changed = True
+            try:
+                changed = False
+                for key, value in kwargs.items():
+                    if value is None:
+                        continue
+                    if only_missing and getattr(station, key) is not None:
+                        continue
+                    setattr(station, key, value)
+                    changed = True
 
-            if changed:
-                session.commit()
-                logger.info("Updated station metadata for station %s.", id)
-                session.refresh(station)
-            return station
-        except Exception as e:
-            session.rollback()
-            logger.exception("Error updating station metadata for station %s", id)
-            return None
-        finally:
-            session.close()
+                if changed:
+                    session.commit()
+                    logger.info("Updated station metadata for station %s.", id)
+                    session.refresh(station)
+                return station
+            except Exception as e:
+                session.rollback()
+                logger.exception("Error updating station metadata for station %s", id)
+                return None
 
     def variable_exists(self, name: str):
         existing_variable = self.get_variables(name = name)
@@ -220,10 +211,6 @@ class InterpDB:
         if_exists='append',
         ignore_missing_variables: bool = False,
         ):
-        """
-        Insert measurement data into the database. All columns other than 'datetime' are assumed to contain variables and will be inserted into the Measurement table.
-        Stations and variables which do not exist in the database will be created automatically in the respective tables.
-        """
         if data.empty:
             raise ValueError("Empty dataframe provided to add_station_data")
 
@@ -232,6 +219,14 @@ class InterpDB:
 
         if 'datetime' not in data.columns:
             raise ValueError("Missing column 'datetime' in data.")
+
+        data = data.copy()
+        data["datetime"] = pd.to_datetime(data["datetime"], utc=True, errors='raise')
+        if 'station_id' in data.columns:
+            data_id = str(data.station_id.unique().item())
+            if data_id != id:
+                raise ValueError(f"Station id in data does not match provided id. Got {data_id} vs {id}")
+            data.drop(['station_id'], inplace = True)
 
         variable_columns = [col for col in data.columns if col != 'datetime']
         if len(variable_columns) == 0:
@@ -244,7 +239,6 @@ class InterpDB:
             available_variables = [i.name for i in self.get_variables()]
             raise ValueError(f"Cannot add station data to database because the following variables are missing: {missing_variables}. Avaiable variabels: {available_variables}")
 
-        # Make a copy to avoid modifying the original DataFrame
         active_variables = [i for i in variable_columns if i not in missing_variables]
         if len(active_variables) == 0:
             raise ValueError("No variables available to insert into the database")
@@ -262,7 +256,7 @@ class InterpDB:
             var_name='variable',
             value_name='value'
         )
-        # measurements.dropna(subset=['value'], inplace = True)
+        measurements.dropna(subset=['value'], inplace = True)
 
         variable_id_map = {i: self.get_variables(i)[0].id for i in active_variables}
 
@@ -283,7 +277,8 @@ class InterpDB:
             )
             logger.debug("Inserted %s measurement rows for station %s and %s variables.", len(measurements), id, len(active_variables))
         except Exception as e:
-            logger.error(f"Error inserting bulk measurement data: {e}")
+            logger.exception("Error inserting bulk measurement data for station %s", id)
+            raise
                     
     def close(self):
         """

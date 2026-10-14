@@ -40,10 +40,11 @@ class Measurement(Base):
     __tablename__ = "measurements"
 
     id = Column(Integer, primary_key=True)
-    station_id = Column(Integer, ForeignKey("stations.id", onupdate="CASCADE", ondelete='CASCADE'), nullable=False)
+    station_id = Column(String, ForeignKey("stations.id", onupdate="CASCADE", ondelete='CASCADE'), nullable=False)
     variable_id = Column(Integer, ForeignKey("variables.id", onupdate="CASCADE", ondelete='CASCADE'), nullable=False)
-    datetime = Column(DateTime, nullable=False)
+    datetime = Column(DateTime, timezone=True, nullable=False)
     value = Column(Float)
+    retrieved_at = Column(DateTime, timezone=True, nullable=False)
 
     station = relationship("Station", back_populates="measurements")
     variable = relationship("Variable", back_populates="measurements")
