@@ -3,12 +3,12 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
@@ -42,11 +42,19 @@ class Measurement(Base):
     id = Column(Integer, primary_key=True)
     station_id = Column(String, ForeignKey("stations.id", onupdate="CASCADE", ondelete='CASCADE'), nullable=False)
     variable_id = Column(Integer, ForeignKey("variables.id", onupdate="CASCADE", ondelete='CASCADE'), nullable=False)
-    datetime = Column(DateTime, timezone=True, nullable=False)
+    datetime = Column(DateTime(timezone=True), nullable=False)
     value = Column(Float)
-    retrieved_at = Column(DateTime, timezone=True, nullable=False)
+    retrieved_at = Column(DateTime(timezone=True), nullable=False)
 
     station = relationship("Station", back_populates="measurements")
     variable = relationship("Variable", back_populates="measurements")
 
-    __table_args__ = (UniqueConstraint("station_id", "variable_id", "datetime"), )
+    __table_args__ = (
+        UniqueConstraint("station_id", "variable_id", "datetime"),
+        Index(
+            "ix_measurements_variable_datetime_station",
+            "variable_id",
+            "datetime",
+            "station_id",
+        ),
+    )
