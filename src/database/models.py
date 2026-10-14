@@ -16,7 +16,7 @@ Base = declarative_base()
 class Station(Base):
     __tablename__ = "stations"
 
-    id = Column(String, nullable=False, unique = True)
+    id = Column(String, nullable=False, unique = True, primary_key=True)
     name = Column(String)
     latitude = Column(Float, nullable=False)
     longitude = Column(Float, nullable=False)
