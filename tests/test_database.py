@@ -64,6 +64,16 @@ def test_add_station_data_stores_retrieval_timestamp(database):
             }
         ),
     )
+    database.add_station_data(
+        "station-1",
+        pd.DataFrame(
+            {
+                "station_id": ["station-1"],
+                "datetime": ["2026-01-01T00:00:00Z"],
+                "tair_2m": [3.0],
+            }
+        ),
+    )
 
     data = database.get_data(
         "station-1",
@@ -72,4 +82,5 @@ def test_add_station_data_stores_retrieval_timestamp(database):
         variables=["tair_2m"],
     )
 
-    assert data["tair_2m"].tolist() == [2.5]
+    assert len(data) == 1
+    assert data["tair_2m"].tolist() == [3.0]

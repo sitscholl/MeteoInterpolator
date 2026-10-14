@@ -1,15 +1,26 @@
 import logging
 import math
 from contextlib import contextmanager
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 
 import pandas as pd
 from sqlalchemy import create_engine, event
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import sessionmaker
 
 from . import models
 
 logger = logging.getLogger(__name__)
+
+_INSERT_STATEMENT = sqlite_insert(models.Measurement)
+_UPSERT_STATEMENT = _INSERT_STATEMENT.on_conflict_do_update(
+    index_elements=["station_id", "variable_id", "datetime"],
+    set_={
+        "value": _INSERT_STATEMENT.excluded.value,
+        "retrieved_at": _INSERT_STATEMENT.excluded.retrieved_at,
+    },
+)
+_BATCH_SIZE = 5_000
 
 class InterpolationDB:
 
@@ -134,9 +145,10 @@ class InterpolationDB:
                 query = query.filter(models.Measurement.datetime >= start_time_utc)
 
             if variables is not None:
+                available_variables = self.get_variables()
                 variables_ids = []
                 for v in variables:
-                    variable_model = self.get_variables(v)
+                    variable_model = [i for i in available_variables if i.name == v]
                     if not variable_model:
                         logger.warning(f"Variable {v} not found in database")
                         continue
@@ -259,22 +271,21 @@ class InterpolationDB:
         self, 
         id: str,
         data: pd.DataFrame, 
-        index=False, 
-        index_label=None, 
-        if_exists='append',
         ignore_missing_variables: bool = False,
         ):
+
         if data.empty:
             raise ValueError("Empty dataframe provided to add_station_data")
-
         if not self.station_exists(id):
             raise ValueError(f"Cannot add data for station {id} because station does not exist in the database. Add station first.")
-
         if 'datetime' not in data.columns:
             raise ValueError("Missing column 'datetime' in data.")
 
+        #Transform datetime
         data = data.copy()
         data["datetime"] = pd.to_datetime(data["datetime"], utc=True, errors='raise')
+        
+        # Validate and drop station_id column if present
         if 'station_id' in data.columns:
             station_ids = data["station_id"].dropna().astype(str).unique()
             if len(station_ids) != 1:
@@ -290,28 +301,33 @@ class InterpolationDB:
                 )
             data.drop(columns=["station_id"], inplace=True)
 
+        #Validate variables
         variable_columns = [col for col in data.columns if col != 'datetime']
         if len(variable_columns) == 0:
             raise ValueError('No variable columns found in data')
 
-        missing_variables = [i for i in variable_columns if not self.variable_exists(i)]
+        variables_by_name = {
+            variable.name: variable.id
+            for variable in self.get_variables()
+        }
+
+        missing_variables = [name for name in variable_columns if name not in variables_by_name]
         if len(missing_variables) > 0 and ignore_missing_variables:
             logger.warning("Ignoring missing variables when adding station data: %s", missing_variables)
         elif len(missing_variables) > 0:
-            available_variables = [i.name for i in self.get_variables()]
-            raise ValueError(f"Cannot add station data to database because the following variables are missing: {missing_variables}. Avaiable variabels: {available_variables}")
+            raise ValueError(f"Cannot add station data to database because the following variables are missing: {missing_variables}. Avaiable variabels: {variables_by_name.keys()}")
 
         active_variables = [i for i in variable_columns if i not in missing_variables]
         if len(active_variables) == 0:
             raise ValueError("No variables available to insert into the database")
+        
+        # Create table for database insertion
         measurements = data[['datetime'] + active_variables].copy()
+        measurements = measurements.drop_duplicates(
+            subset=["station_id", "variable_id", "datetime"],
+            keep="last",
+        )
 
-        if measurements['datetime'].dt.tz is None:
-            measurements['datetime'] = measurements['datetime'].dt.tz_localize('UTC')
-        else:
-            measurements['datetime'] = measurements['datetime'].dt.tz_convert('UTC')
-
-        # Convert wide table (one column per variable) into long form for bulk insert
         measurements['retrieved_at'] = pd.Timestamp.now(tz = "UTC")
         measurements = measurements.melt(
             id_vars=['datetime', 'retrieved_at'],
@@ -321,24 +337,22 @@ class InterpolationDB:
         )
         measurements.dropna(subset=['value'], inplace = True)
 
-        variable_id_map = {i: self.get_variables(i)[0].id for i in active_variables}
-
         measurements['station_id'] = id
-        measurements['variable_id'] = measurements['variable'].map(variable_id_map)
+        measurements['variable_id'] = measurements['variable'].map(variables_by_name)
         measurements.drop(columns = ['variable'], inplace = True)
 
         # Ensure column order matches the measurements table definition
         measurements = measurements[['station_id', 'variable_id', 'datetime', 'value', 'retrieved_at']]
 
         try:
-            measurements.to_sql(
-                name='measurements',
-                con=self.engine,
-                index=index,
-                index_label=index_label,
-                if_exists=if_exists
-            )
-            logger.debug("Inserted %s measurement rows for station %s and %s variables.", len(measurements), id, len(active_variables))
+            with self.Session.begin() as session:
+                for start in range(0, len(measurements), _BATCH_SIZE):
+                    batch = measurements.iloc[start : start + _BATCH_SIZE]
+                    session.execute(
+                        _UPSERT_STATEMENT,
+                        batch.to_dict(orient="records"),
+                    )
+            logger.debug("Inserted %s measurements for station %s and %s variables.", len(measurements), id, len(active_variables))
         except Exception as e:
             logger.exception("Error inserting bulk measurement data for station %s", id)
             raise
