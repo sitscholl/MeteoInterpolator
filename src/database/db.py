@@ -45,7 +45,7 @@ class InterpDB:
                 query = query.filter(models.Variable.name == name)
             return query.all()
 
-    def query_data(
+    def get_data(
             self,
             station_id: str,
             start_time: datetime,
@@ -59,7 +59,6 @@ class InterpDB:
                     models.Measurement.datetime.label("datetime"),
                     models.Measurement.value.label("value"),
                     models.Station.id.label("station_id"),
-                    models.Measurement.model.label('model'),
                     models.Variable.name.label("variable"),
                 )
                 .join(models.Station, models.Measurement.station_id == models.Station.id)
@@ -69,9 +68,13 @@ class InterpDB:
                 )
             )
 
+            start_time = pd.Timestamp(start_time)
             orig_timezone = start_time.tzinfo
+            if orig_timezone is None:
+                raise ValueError("Start time has not timezone. Use timezone-aware datetimes to get data from the database")
             start_time_utc = start_time.astimezone(UTC)
             if end_time is not None:
+                end_time = pd.Timestamp(end_time)
                 end_timezone = end_time.tzinfo
                 if orig_timezone != end_timezone:
                     raise ValueError(f"Start and end timezone must be the same. Got {orig_timezone} vs {end_timezone}")
@@ -111,8 +114,8 @@ class InterpDB:
         return df
 
     def station_exists(self, id: str):
-        existing_station = self.get_stations(id = id).first()
-        return existing_station is not None
+        existing_station = self.get_stations(id = id)
+        return len(existing_station) > 0
 
     def add_station(
         self, 
@@ -150,10 +153,11 @@ class InterpDB:
         **kwargs,
     ):
 
-        station = self.get_stations(id).first()
+        stations = self.get_stations(id)
 
-        if station is None:
+        if len(stations) == 0:
             raise ValueError(f"No station with id {id} for exists.")
+        station = stations[0]
 
         allowed_fields = {"name", "latitude", "longitude", "elevation"}
         invalid_fields = {k: v for k, v in kwargs if k not in allowed_fields}
@@ -184,8 +188,8 @@ class InterpDB:
             session.close()
 
     def variable_exists(self, name: str):
-        existing_variable = self.get_variables(name = name).first()
-        return existing_variable is not None
+        existing_variable = self.get_variables(name = name)
+        return len(existing_variable) > 0
 
     def add_variable(self, name: str, unit: str, description: str | None = None):
 
@@ -242,6 +246,8 @@ class InterpDB:
 
         # Make a copy to avoid modifying the original DataFrame
         active_variables = [i for i in variable_columns if i not in missing_variables]
+        if len(active_variables) == 0:
+            raise ValueError("No variables available to insert into the database")
         measurements = data[['datetime'] + active_variables].copy()
 
         if measurements['datetime'].dt.tz is None:
@@ -258,7 +264,7 @@ class InterpDB:
         )
         # measurements.dropna(subset=['value'], inplace = True)
 
-        variable_id_map = {i: self.get_variables(i).id for i in active_variables}
+        variable_id_map = {i: self.get_variables(i)[0].id for i in active_variables}
 
         measurements['station_id'] = id
         measurements['variable_id'] = measurements['variable'].map(variable_id_map)
@@ -289,61 +295,3 @@ class InterpDB:
                 logger.debug("Database engine disposed.")
         except Exception as e:
             logger.warning(f"Error disposing database engine: {e}")
-
-
-# if __name__ == "__main__":
-    # import numpy as np
-    # from ..config import load_config
-
-    # config = load_config('config/config.yaml')
-
-    # # Create database instance
-    # meteo_db = MeteoDB()
-
-    # # Example 2: Insert data with automatic station and variable creation
-    # # Create sample data with external station IDs and variable names
-    # df = pd.DataFrame({
-    #     'datetime': np.datetime64('2017-01-01') + np.array([np.timedelta64(i, 'D') for i in np.random.randint(0, 1000, size = 4)]),
-    #     'station_id': ['3', '3', '32', '32'],
-    #     "tair_2m": np.random.rand(4),                           # Temperature 2m8
-    #     "tsoil_25cm": np.random.rand(4),     # Soil temperature -25cm
-    #     "tdry_60cm": np.random.rand(4),           # Dry temperature 60cm
-    #     "twet_60cm": np.random.rand(4),           # Wet temperature
-    #     "relative_humidity": np.random.rand(4),           # Relative humidity
-    #     "wind_speed": np.random.rand(4), 
-    # })
-
-    # # Insert data - stations and variables will be created automatically
-    # meteo_db.insert_data(df, provider = 'SBR')
-
-    # # Query results
-    # stations = meteo_db.query_station()
-    # measurements = meteo_db.query_data()
-
-    # print("Stations:")
-    # for station in stations:
-    #     print(f"  ID: {station.id}, Provider: {station.provider}, External ID: {station.external_id}, Name: {station.name}")
-
-    # print(f"\nTotal measurements: {len(measurements)}")
-
-    # # Example 3: Insert data with provider as parameter instead of column
-    # df2 = pd.DataFrame({
-    #     'external_station_id': ['STATION_003'],
-    #     'variable_name': ['wind_speed'],
-    #     'timestamp': [datetime.now()],
-    #     'value': [5.2],
-    #     'variable_unit': ['m/s']
-    # })
-
-    # meteo_db.insert_data(df2, provider='wind_service')
-
-    # print(f"Total stations after second insert: {len(meteo_db.query_station())}")
-    # print(f"Total measurements after second insert: {len(meteo_db.query_data())}")
-
-    # # Example 4: Query measurements with filters
-    # print("\nQuerying measurements for weather_service provider:")
-    # weather_data = meteo_db.query_measurements(provider='weather_service')
-    # print(weather_data.head())
-
-    # print(f"\nAvailable variables: {meteo_db.list_variables()}")
-    # print(f"Available providers: {meteo_db.list_providers()}")
