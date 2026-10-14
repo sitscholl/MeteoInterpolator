@@ -1,7 +1,7 @@
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List
 
-PROVIDER_SENSOR_MAPS: Dict[str, Dict[str, str]] = {
+PROVIDER_SENSOR_MAPS: dict[str, dict[str, str]] = {
     "province_api": {
         "LT": "tair_2m",
         "LF": "relative_humidity",
@@ -22,7 +22,7 @@ PROVIDER_SENSOR_MAPS: Dict[str, Dict[str, str]] = {
     }
 }
 
-PROVIDER_COLUMN_RENAMES: Dict[str, Dict[str, str]] = {
+PROVIDER_COLUMN_RENAMES: dict[str, dict[str, str]] = {
     "province_api": {
         "DATE": "datetime",
     },
@@ -33,14 +33,14 @@ PROVIDER_COLUMN_RENAMES: Dict[str, Dict[str, str]] = {
 
 @dataclass
 class SensorManager:
-    sensor_maps: Dict[str, Dict[str, str]]
-    extra_renames: Dict[str, Dict[str, str]] | None = None
-    _reverse: Dict[str, Dict[str, str]] = field(init=False, repr=False)
+    sensor_maps: dict[str, dict[str, str]]
+    extra_renames: dict[str, dict[str, str]] | None = None
+    _reverse: dict[str, dict[str, str]] = field(init=False, repr=False)
 
     def __post_init__(self):
-        reverse: Dict[str, Dict[str, str]] = {}
+        reverse: dict[str, dict[str, str]] = {}
         for provider, mapping in self.sensor_maps.items():
-            reverse_map: Dict[str, str] = {}
+            reverse_map: dict[str, str] = {}
             for provider_name, harmonized in mapping.items():
                 if harmonized in reverse_map:
                     raise ValueError(
@@ -50,16 +50,16 @@ class SensorManager:
             reverse[provider] = reverse_map
         object.__setattr__(self, "_reverse", reverse)
 
-    def harmonized_names(self, provider: str) -> List[str]:
+    def harmonized_names(self, provider: str) -> list[str]:
         return sorted(set(self.sensor_maps.get(provider, {}).values()))
 
-    def rename_map(self, provider: str, include_extra: bool = True) -> Dict[str, str]:
+    def rename_map(self, provider: str, include_extra: bool = True) -> dict[str, str]:
         merged = dict(self.sensor_maps.get(provider, {}))
         if include_extra and self.extra_renames is not None:
             merged.update(self.extra_renames.get(provider, {}))
         return merged
 
-    def resolve_provider_codes(self, provider: str, sensor_codes: Iterable[str]) -> List[str]:
+    def resolve_provider_codes(self, provider: str, sensor_codes: Iterable[str]) -> list[str]:
         codes = self._normalize_codes(sensor_codes)
         mapping = self.sensor_maps.get(provider, {})
         reverse = self._reverse.get(provider, {})
@@ -75,16 +75,16 @@ class SensorManager:
         missing = [code for code in codes if code not in reverse and code not in mapping]
         raise KeyError(f"Unknown sensor codes for provider '{provider}': {missing}")
 
-    def _normalize_codes(self, sensor_codes: Iterable[str]) -> List[str]:
+    def _normalize_codes(self, sensor_codes: Iterable[str]) -> list[str]:
         if isinstance(sensor_codes, str):
             sensor_codes = [sensor_codes]
         if not isinstance(sensor_codes, Iterable):
-            raise ValueError(f"Sensor codes must be iterable. Got {type(sensor_codes)}")
-        normalized: List[str] = []
+            raise TypeError(f"Sensor codes must be iterable. Got {type(sensor_codes)}")
+        normalized: list[str] = []
         seen = set()
         for code in sensor_codes:
             if not isinstance(code, str):
-                raise ValueError(f"Sensor code must be str. Got {type(code)}")
+                raise TypeError(f"Sensor code must be str. Got {type(code)}")
             code = code.strip()
             if not code or code in seen:
                 continue
