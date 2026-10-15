@@ -99,3 +99,41 @@ def get_date_format_from_freq(freq: str, filename_safe: bool = False) -> str:
     if delta >= pd.Timedelta(minutes=1):
         return "%Y-%m-%d_%H-%M" if filename_safe else "%Y-%m-%d %H:%M"
     return "%Y-%m-%d_%H-%M-%S" if filename_safe else "%Y-%m-%d %H:%M:%S"
+
+def validate_station_coordinates(
+    latitude: float,
+    longitude: float,
+    elevation: float,
+) -> tuple[float, float, float]:
+    """Return finite station coordinates after validating their geographic bounds."""
+    values = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "elevation": elevation,
+    }
+    numeric_values: dict[str, float] = {}
+    for field, value in values.items():
+        if value is None:
+            raise ValueError(f"Station {field} cannot be None.")
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Station {field} must be a finite number. Got {value!r}"
+            ) from exc
+        if not math.isfinite(numeric_value):
+            raise ValueError(
+                f"Station {field} must be a finite number. Got {value!r}"
+            )
+        numeric_values[field] = numeric_value
+
+    if not -90 <= numeric_values["latitude"] <= 90:
+        raise ValueError("Station latitude must be between -90 and 90 degrees.")
+    if not -180 <= numeric_values["longitude"] <= 180:
+        raise ValueError("Station longitude must be between -180 and 180 degrees.")
+
+    return (
+        numeric_values["latitude"],
+        numeric_values["longitude"],
+        numeric_values["elevation"],
+    )
