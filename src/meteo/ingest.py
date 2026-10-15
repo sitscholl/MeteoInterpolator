@@ -13,7 +13,7 @@ from ..domain.dem import DEM
 from .base import BaseMeteoHandler
 from .types import Station
 from ..utils import validate_station_coordinates
-from ..resample import MeteoResampler
+from .resample import MeteoResampler
 
 logger = logging.getLogger(__name__)
 
