@@ -4,6 +4,7 @@ from shapely.geometry import Point
 
 from src.domain.meteo_data import MeteoData
 from src.meteo.resample import MeteoResampler
+from src.meteo.types import Station
 
 
 def test_min_samples_for_coverage_uses_source_and_target_frequency():
@@ -59,3 +60,48 @@ def test_resampling_masks_values_below_min_coverage():
     )
 
     assert pd.isna(result.loc[0, "tair_2m"])
+
+
+def test_resample_station_groups_by_station_id_and_preserves_metadata():
+    station = Station(
+        id="station-a",
+        x=11.0,
+        y=46.0,
+        crs=4326,
+        elevation=1000.0,
+        data=pd.DataFrame(
+            {
+                "station_id": ["station-a", "station-a"],
+                "datetime": pd.to_datetime(
+                    ["2026-01-01 00:00", "2026-01-01 00:10"],
+                    utc=True,
+                ),
+                "tair_2m": [1.0, 3.0],
+            }
+        ),
+    )
+    resampler = MeteoResampler(resample_colmap={"tair_2m": "mean"})
+
+    result = resampler.resample_station(
+        station,
+        freq="h",
+        source_freq="10min",
+        min_sample_size=1,
+    )
+
+    assert result.id == station.id
+    assert result.elevation == station.elevation
+    assert result.data["station_id"].tolist() == ["station-a"]
+    assert result.data["tair_2m"].tolist() == [2.0]
+
+
+def test_resample_station_leaves_missing_data_unchanged():
+    station = Station(
+        id="station-a",
+        x=11.0,
+        y=46.0,
+        crs=4326,
+        elevation=1000.0,
+    )
+
+    assert MeteoResampler().resample_station(station, freq="h") is station
