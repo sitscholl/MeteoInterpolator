@@ -4,7 +4,7 @@ import logging
 import math
 from typing import Callable, Any, Iterable
 
-from .domain.meteo_data import MeteoData
+from ..domain.meteo_data import MeteoData
 
 logger = logging.getLogger(__name__)
 

@@ -17,7 +17,7 @@ from .domain.schemas import _OBSERVATION_POINTS_SCHEMA
 from .interpolate import BaseDistanceCalculator, DistanceField, Interpolator
 from .interpolate.cv import validate_cross_validation_options
 from .meteo.base import BaseMeteoHandler
-from .resample import MeteoResampler
+from .meteo.resample import MeteoResampler
 
 logger = logging.getLogger(__name__)
 

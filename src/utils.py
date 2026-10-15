@@ -1,8 +1,9 @@
 import datetime
+import logging
+import math
+
 import pandas as pd
 from pandas.tseries.frequencies import to_offset
-
-import logging
 
 logger = logging.getLogger(__name__)
 
