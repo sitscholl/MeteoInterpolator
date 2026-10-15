@@ -6,6 +6,8 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
+from pandas.tseries.frequencies import to_offset
+from pandas.tseries.offsets import Tick
 from pyproj import CRS, Transformer
 
 from ..database.db import InterpolationDB
@@ -16,6 +18,8 @@ from .resample import MeteoResampler
 from .types import Station
 
 logger = logging.getLogger(__name__)
+
+_TARGET_FREQ = 'h'
 
 @dataclass
 class StationIngestResult:
@@ -44,6 +48,23 @@ class MeteoIngestor:
         self.resampler = resampler
         self.overlap_days = overlap_days
         self.default_start_date = default_start_date
+
+    def _validate_frequency(source_freq, target_freq):
+        source = to_offset(source_freq)
+        target = to_offset(target_freq)
+
+        if not isinstance(target, Tick) or target.n <= 0:
+            raise ValueError("Target frequency must be a positive, fixed duration.")
+
+        if (
+            not isinstance(source, Tick)
+            or source.n <= 0
+            or source.nanos > target.nanos
+        ):
+            raise ValueError(
+                f"Cannot add data with source frequency {source_freq} to database. "
+                f"Raw data must have intervals no longer than {target_freq}."
+            )
 
     def _update_elevation(self, station: Station, dem: DEM, overwrite: bool = False) -> Station:
         if not isinstance(dem, DEM):
@@ -111,7 +132,7 @@ class MeteoIngestor:
 
         return min(timestamps) - pd.Timedelta(days=self.overlap_days)
 
-    async def refresh_station(
+    async def upsert_station(
         self,
         station_id: str,
         sensors: list[str],
@@ -149,16 +170,27 @@ class MeteoIngestor:
                     target_timezone = ZoneInfo('UTC'),
                 )
 
+            if station.data is None:
+                logger.warning("No data found for station %s. Skipping database insertion", station_id)
+                return StationIngestResult(
+                        station_id = station_id,
+                        status = 'skipped',
+                        requested_start = requested_start,
+                        requested_end = requested_end,
+                        observations_written = 0,
+                        error = None
+                    )
+
             station = self._update_elevation(station, dem, overwrite=False)
             _ = validate_station_coordinates(station.y, station.x, station.elevation)
 
             if not self.database.station_exists(station_id):
                 self.database.add_station(
-                    id = station.id, latitude = station.y, longitude = station.x, elevation = station.elevation
+                    id = station.id, latitude = station.y, longitude = station.x, elevation = station.elevation, name = station.name
                 )
             elif update_station_metadata:
                 self.database.update_station(
-                    id = station.id, latitude = station.y, longitude = station.x, elevation = station.elevation, only_missing = False
+                    id = station.id, latitude = station.y, longitude = station.x, elevation = station.elevation, name = station.name, only_missing = False
                 )
 
             station_variables = [i for i in station.data.columns if i not in ['datetime', 'station_id']]
@@ -169,8 +201,10 @@ class MeteoIngestor:
                     self.database.add_variable(name = var)
 
             ##Resample to 1h resolution to reduce database size
+            source_freq = self.loader.freq
+            self._validate_frequency(source_freq, _TARGET_FREQ) ##Make sure source_freq is at least hourly resolution
             station = self.resampler.resample_station(
-                station, freq = 'h', datetime_col = 'datetime', source_freq = self.loader.freq, min_sample_size = 1,
+                station, freq = _TARGET_FREQ, datetime_col = 'datetime', source_freq = self.loader.freq, min_sample_size = 1,
                 )
             
             written_rows = self.database.add_station_data(id = station.id, data = station.data, ignore_missing_variables = True)
