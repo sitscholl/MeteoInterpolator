@@ -9,6 +9,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import sessionmaker
 
 from . import models
+from ..utils import validate_station_coordinates
 
 logger = logging.getLogger(__name__)
 
@@ -40,45 +41,6 @@ class InterpolationDB:
     def _enable_sqlite_foreign_keys(dbapi_connection, connection_record) -> None:
         """Enable SQLite foreign-key enforcement for every pooled connection."""
         dbapi_connection.execute("PRAGMA foreign_keys=ON")
-
-    @staticmethod
-    def _validate_station_coordinates(
-        latitude: float,
-        longitude: float,
-        elevation: float,
-    ) -> tuple[float, float, float]:
-        """Return finite station coordinates after validating their geographic bounds."""
-        values = {
-            "latitude": latitude,
-            "longitude": longitude,
-            "elevation": elevation,
-        }
-        numeric_values: dict[str, float] = {}
-        for field, value in values.items():
-            if value is None:
-                raise ValueError(f"Station {field} cannot be None.")
-            try:
-                numeric_value = float(value)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"Station {field} must be a finite number. Got {value!r}"
-                ) from exc
-            if not math.isfinite(numeric_value):
-                raise ValueError(
-                    f"Station {field} must be a finite number. Got {value!r}"
-                )
-            numeric_values[field] = numeric_value
-
-        if not -90 <= numeric_values["latitude"] <= 90:
-            raise ValueError("Station latitude must be between -90 and 90 degrees.")
-        if not -180 <= numeric_values["longitude"] <= 180:
-            raise ValueError("Station longitude must be between -180 and 180 degrees.")
-
-        return (
-            numeric_values["latitude"],
-            numeric_values["longitude"],
-            numeric_values["elevation"],
-        )
     
     @contextmanager
     def session_scope(self):
@@ -167,6 +129,19 @@ class InterpolationDB:
 
         return df
 
+    def get_last_row(self, station_id: str, variables: list[str] | None = None):
+        if not self.station_exists(station_id):
+            raise ValueError(f"No station with id {station_id} in the database")
+        
+        with self.session_scope() as session:
+            query = (
+                session.query(models.Measurement)
+                .join(models.Station, models.Measurement.station_id == models.Station.id)
+                .filter(models.Station.id == station_id)
+                .order_by(models.Measurement.datetime.desc())
+                )
+            return query.first()
+
     def station_exists(self, id: str):
         existing_station = self.get_stations(id = id)
         return len(existing_station) > 0
@@ -182,7 +157,7 @@ class InterpolationDB:
         if self.station_exists(id):
             raise ValueError(f"Station with id {id} already exists in the database")
 
-        latitude, longitude, elevation = self._validate_station_coordinates(
+        latitude, longitude, elevation = validate_station_coordinates(
             latitude,
             longitude,
             elevation,
@@ -233,7 +208,7 @@ class InterpolationDB:
                     changed = True
 
                 if changed:
-                    _ = self._validate_station_coordinates(station.latitude, station.longitude, station.elevation)
+                    _ = validate_station_coordinates(station.latitude, station.longitude, station.elevation)
                     session.commit()
                     logger.info("Updated station metadata for station %s.", id)
                     session.refresh(station)
