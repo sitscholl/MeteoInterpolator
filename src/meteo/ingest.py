@@ -1,19 +1,19 @@
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
-import logging
-
-import pandas as pd
-import numpy as np
-from pyproj import Transformer, CRS
 from zoneinfo import ZoneInfo
+
+import numpy as np
+import pandas as pd
+from pyproj import CRS, Transformer
 
 from ..database.db import InterpolationDB
 from ..domain.dem import DEM
-from .base import BaseMeteoHandler
-from .types import Station
 from ..utils import validate_station_coordinates
+from .base import BaseMeteoHandler
 from .resample import MeteoResampler
+from .types import Station
 
 logger = logging.getLogger(__name__)
 
@@ -29,13 +29,13 @@ class StationIngestResult:
 class MeteoIngestor:
     def __init__(
         self,
-        handler: BaseMeteoHandler,
+        loader: BaseMeteoHandler,
         database: InterpolationDB,
         resampler: MeteoResampler,
         overlap_days: int = 7,
-        default_start_date: datetime = datetime(2000, 1, 1, tzinfo = ZoneInfo('UTC'))
+        default_start_date: datetime = datetime(2020, 1, 1, tzinfo = ZoneInfo('UTC'))
     ):
-        self.handler = handler
+        self.loader = loader
         self.database = database
         self.resampler = resampler
         self.overlap_days = overlap_days
@@ -69,9 +69,7 @@ class MeteoIngestor:
             )
   
         if outside:
-            raise ValueError(
-                "Cannot update station elevation because station %s is outside the DEM extent.", station.id
-            )
+            raise ValueError(f"Cannot update station elevation because station {station.id} is outside the DEM extent.")
 
         sampled_elevation = dem_data.sel(x=x, y=y, method="nearest").item()
 
@@ -81,6 +79,13 @@ class MeteoIngestor:
         station.elevation = sampled_elevation
 
         return station
+
+    def _get_start_date(self, last_rows: dict | None):
+        if last_rows is None:
+            return self.default_start_date
+
+        var_start_dates = [i.datetime if hasattr(i, 'datetime') and i.datetime is not None else self.default_start_date for i in last_rows.values()]
+        return min(var_start_dates)        
 
     async def refresh_station(
         self,
@@ -94,11 +99,8 @@ class MeteoIngestor:
         if isinstance(sensors, str):
             sensors = [sensors]
 
-        last_database_row = self.database.get_last_row(station_id)
-        if last_database_row is not None:
-            requested_start = last_database_row.datetime - pd.Timedelta(self.overlap_days)
-        else:
-            requested_start = self.default_start_date
+        last_database_rows = self.database.get_last_row_per_sensor(station_id, sensors)
+        requested_start = self._get_start_date(last_database_rows)
 
         if end is not None:
             if end.tzinfo is None:
@@ -111,13 +113,14 @@ class MeteoIngestor:
             if requested_end <= requested_start:
                 raise ValueError(f"Requested end must be before requested start. Got {requested_end} vs {requested_start}")
 
-            station = await self.loader.get_data(
-                station_id = station_id,
-                sensor_codes = sensors,
-                start = requested_start, 
-                end = requested_end,
-                target_timezone = ZoneInfo('UTC'),
-            )
+            async with self.loader as meteo_loader:
+                station = await meteo_loader.get_data(
+                    station_id = station_id,
+                    sensor_codes = sensors,
+                    start = requested_start, 
+                    end = requested_end,
+                    target_timezone = ZoneInfo('UTC'),
+                )
 
             station = self._update_elevation(station, dem, overwrite=False)
             _ = validate_station_coordinates(station.y, station.x, station.elevation)
@@ -136,7 +139,6 @@ class MeteoIngestor:
 
             if len(variables_not_in_db) > 0 and add_missing_variables:
                 for var in variables_not_in_db:
-                    ##TODO: Find way to handle units of variables
                     self.database.add_variable(name = var)
 
             ##Resample to 1h resolution to reduce database size
@@ -145,20 +147,20 @@ class MeteoIngestor:
                 station, freq = 'H', datetime_col = 'datetime', source_freq = self.loader.freq, min_sample_size = 1,
                 )
             
-            self.database.add_station_data(id = station.id, data = station.data, ignore_missing_variables = True)
+            written_rows = self.database.add_station_data(id = station.id, data = station.data, ignore_missing_variables = True)
 
             return StationIngestResult(
                 station_id = station.id,
                 status = 'completed',
                 requested_start = requested_start,
                 requested_end = requested_end,
-                observations_written = len(station.data),
+                observations_written = written_rows,
                 error = None
             )
         except Exception as e:
             logger.exception("Refreshing station failed")
             return StationIngestResult(
-                station_id = station.id,
+                station_id = station_id,
                 status = 'failed',
                 requested_start = requested_start,
                 requested_end = requested_end,
