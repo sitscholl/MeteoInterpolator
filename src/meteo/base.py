@@ -149,6 +149,7 @@ class BaseMeteoHandler(ABC):
             y = metadata.get('y'),
             elevation = metadata.get('elevation'),
             crs = metadata.get('crs'),
+            name = metadata.get('name'),
             data = transformed_data,
         )
 
