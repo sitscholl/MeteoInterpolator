@@ -35,10 +35,14 @@ class MeteoIngestor:
         overlap_days: int = 7,
         default_start_date: datetime = datetime(2020, 1, 1, tzinfo = ZoneInfo('UTC'))
     ):
+
+        if overlap_days is None or not np.isfinite(overlap_days) or overlap_days < 1:
+            raise ValueError("Overlap days must be a positive integer greater than 0")
+
         self.loader = loader
         self.database = database
         self.resampler = resampler
-        self.overlap_days = overlap_days
+        self.overlap_days = int(overlap_days)
         self.default_start_date = default_start_date
 
     def _update_elevation(self, station: Station, dem: DEM, overwrite: bool = False) -> Station:
@@ -80,12 +84,32 @@ class MeteoIngestor:
 
         return station
 
-    def _get_start_date(self, last_rows: dict | None):
-        if last_rows is None:
-            return self.default_start_date
+    def _get_start_date(
+        self,
+        last_rows: dict | None,
+    ) -> pd.Timestamp:
+        default_start = pd.Timestamp(self.default_start_date)
+        if default_start.tzinfo is None:
+            raise ValueError("default_start_date must be timezone aware")
+        default_start = default_start.tz_convert("UTC")
 
-        var_start_dates = [i.datetime if hasattr(i, 'datetime') and i.datetime is not None else self.default_start_date for i in last_rows.values()]
-        return min(var_start_dates)        
+        if not last_rows or any(
+            row is None or row.datetime is None
+            for row in last_rows.values()
+        ):
+            return default_start
+
+        timestamps = []
+        for row in last_rows.values():
+            timestamp = pd.Timestamp(row.datetime)
+            timestamp = (
+                timestamp.tz_localize("UTC")
+                if timestamp.tzinfo is None
+                else timestamp.tz_convert("UTC")
+            )
+            timestamps.append(timestamp)
+
+        return min(timestamps) - pd.Timedelta(days=self.overlap_days)
 
     async def refresh_station(
         self,
@@ -99,19 +123,22 @@ class MeteoIngestor:
         if isinstance(sensors, str):
             sensors = [sensors]
 
-        last_database_rows = self.database.get_last_row_per_sensor(station_id, sensors)
-        requested_start = self._get_start_date(last_database_rows)
-
-        if end is not None:
-            if end.tzinfo is None:
-                raise ValueError("End time must be timezone aware")
-            requested_end = pd.Timestamp(end).tz_convert(ZoneInfo('UTC'))
-        else:
-            requested_end = pd.Timestamp.now(tz = ZoneInfo('UTC'))
-            
+        requested_start = None
+        requested_end = None
         try:
+            last_database_rows = self.database.get_last_row_per_variable(station_id, sensors)
+            requested_start = self._get_start_date(last_database_rows)
+
+            if end is not None:
+                if end.tzinfo is None:
+                    raise ValueError("End time must be timezone aware")
+                requested_end = pd.Timestamp(end).tz_convert(ZoneInfo('UTC'))
+            else:
+                requested_end = pd.Timestamp.now(tz = ZoneInfo('UTC'))
+            
+
             if requested_end <= requested_start:
-                raise ValueError(f"Requested end must be before requested start. Got {requested_end} vs {requested_start}")
+                raise ValueError(f"Requested end must be after requested start. Got {requested_end} vs {requested_start}")
 
             async with self.loader as meteo_loader:
                 station = await meteo_loader.get_data(
@@ -142,7 +169,6 @@ class MeteoIngestor:
                     self.database.add_variable(name = var)
 
             ##Resample to 1h resolution to reduce database size
-            ##TODO: Add resample_station function to resampler class
             station = self.resampler.resample_station(
                 station, freq = 'H', datetime_col = 'datetime', source_freq = self.loader.freq, min_sample_size = 1,
                 )
