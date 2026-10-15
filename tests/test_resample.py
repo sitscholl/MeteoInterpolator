@@ -3,7 +3,7 @@ import pandas as pd
 from shapely.geometry import Point
 
 from src.domain.meteo_data import MeteoData
-from src.resample import MeteoResampler
+from src.meteo.resample import MeteoResampler
 
 
 def test_min_samples_for_coverage_uses_source_and_target_frequency():
