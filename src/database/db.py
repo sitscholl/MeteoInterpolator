@@ -129,7 +129,7 @@ class InterpolationDB:
 
         return df
 
-    def get_last_row_per_sensor(self, station_id: str, variables: list[str]) -> dict | None:
+    def get_last_row_per_variable(self, station_id: str, variables: list[str]) -> dict | None:
         if not self.station_exists(station_id):
             return None
         
