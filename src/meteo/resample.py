@@ -2,8 +2,10 @@ import pandas as pd
 
 import logging
 import math
-from typing import Callable, Any, Iterable
+from typing import Any
+from collections.abc import Callable, Iterable
 
+from .types import Station
 from ..domain.meteo_data import MeteoData
 
 logger = logging.getLogger(__name__)
@@ -185,6 +187,50 @@ class MeteoResampler:
             resampled_prepared = resampled_prepared.rename(columns = {'tair_2m_mean': 'tair_2m'})
 
         return resampled_prepared
+
+    def resample_station(
+        self,
+        station: Station,
+        freq: str | None = None,
+        datetime_col: str = "datetime",
+        groupby_cols: list[str] | None = None,
+        min_sample_size: int | None = None,
+        source_freq: str | None = None,
+    ):
+        if not isinstance(station, Station):
+            raise TypeError(f"Expected Station. Got {type(station)}")
+
+        if station.data.empty:
+            return station
+
+        target_freq = freq or self.target_freq
+        if source_freq is not None and self.frequencies_equal(source_freq, target_freq):
+            logger.info("Skipping station resampling because source frequency %s already matches target frequency %s", source_freq, target_freq)
+            return station
+
+        if min_sample_size is None:
+            min_sample_size = (
+                self.min_samples_for_coverage(source_freq, target_freq)
+                if source_freq is not None
+                else 1
+            )
+
+        resampled = self.apply_resampling(
+            station.data,
+            freq=target_freq,
+            datetime_col=datetime_col,
+            groupby_cols=groupby_cols,
+            min_sample_size=min_sample_size,
+        )
+
+        return Station(
+            data = resampled,
+            id = station.id,
+            x = station.x,
+            y = station.y,
+            crs = station.crs,
+            elevation = station.elevation
+        )
 
     def resample_meteo_data(
         self,
