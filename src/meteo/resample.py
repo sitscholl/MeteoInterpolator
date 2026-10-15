@@ -200,7 +200,7 @@ class MeteoResampler:
         if not isinstance(station, Station):
             raise TypeError(f"Expected Station. Got {type(station)}")
 
-        if station.data.empty:
+        if station.data is None or station.data.empty:
             return station
 
         target_freq = freq or self.target_freq
@@ -214,6 +214,9 @@ class MeteoResampler:
                 if source_freq is not None
                 else 1
             )
+
+        if groupby_cols is None:
+            groupby_cols = ["station_id"]
 
         resampled = self.apply_resampling(
             station.data,

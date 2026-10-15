@@ -37,12 +37,12 @@ class MeteoIngestor:
     ):
 
         if overlap_days is None or not np.isfinite(overlap_days) or overlap_days < 1:
-            raise ValueError("Overlap days must be a positive integer greater than 0")
+            raise ValueError("Overlap days must be a positive number greater than 0")
 
         self.loader = loader
         self.database = database
         self.resampler = resampler
-        self.overlap_days = int(overlap_days)
+        self.overlap_days = overlap_days
         self.default_start_date = default_start_date
 
     def _update_elevation(self, station: Station, dem: DEM, overwrite: bool = False) -> Station:
@@ -170,7 +170,7 @@ class MeteoIngestor:
 
             ##Resample to 1h resolution to reduce database size
             station = self.resampler.resample_station(
-                station, freq = 'H', datetime_col = 'datetime', source_freq = self.loader.freq, min_sample_size = 1,
+                station, freq = 'h', datetime_col = 'datetime', source_freq = self.loader.freq, min_sample_size = 1,
                 )
             
             written_rows = self.database.add_station_data(id = station.id, data = station.data, ignore_missing_variables = True)
