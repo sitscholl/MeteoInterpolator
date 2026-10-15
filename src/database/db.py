@@ -129,18 +129,26 @@ class InterpolationDB:
 
         return df
 
-    def get_last_row(self, station_id: str, variables: list[str] | None = None):
+    def get_last_row_per_sensor(self, station_id: str, variables: list[str]) -> dict | None:
         if not self.station_exists(station_id):
-            raise ValueError(f"No station with id {station_id} in the database")
+            return None
         
+        if isinstance(variables, str):
+            variables = [variables]
+
+        var_results = {}
         with self.session_scope() as session:
-            query = (
-                session.query(models.Measurement)
-                .join(models.Station, models.Measurement.station_id == models.Station.id)
-                .filter(models.Station.id == station_id)
-                .order_by(models.Measurement.datetime.desc())
-                )
-            return query.first()
+            for var in variables:
+                query = (
+                    session.query(models.Measurement)
+                    .join(models.Station, models.Measurement.station_id == models.Station.id)
+                    .join(models.Variable, models.Measurement.variable_id == models.Variable.id)
+                    .filter(models.Station.id == station_id)
+                    .filter(models.Variable.name == var)
+                    .order_by(models.Measurement.datetime.desc())
+                    )
+                var_results[var] = query.first()
+        return var_results
 
     def station_exists(self, id: str):
         existing_station = self.get_stations(id = id)
@@ -222,7 +230,7 @@ class InterpolationDB:
         existing_variable = self.get_variables(name = name)
         return len(existing_variable) > 0
 
-    def add_variable(self, name: str, unit: str, description: str | None = None):
+    def add_variable(self, name: str, unit: str | None = None, description: str | None = None):
 
         if self.variable_exists(name):
             raise ValueError(f"Variable {name} already exists in the database")
@@ -318,6 +326,7 @@ class InterpolationDB:
             keep="last",
         )
 
+        written_rows = 0
         try:
             with self.Session.begin() as session:
                 for start in range(0, len(measurements), _BATCH_SIZE):
@@ -326,10 +335,13 @@ class InterpolationDB:
                         _UPSERT_STATEMENT,
                         batch.to_dict(orient="records"),
                     )
+                    written_rows += len(batch)
             logger.debug("Inserted %s measurements for station %s and %s variables.", len(measurements), id, len(active_variables))
         except Exception as e:
             logger.exception("Error inserting bulk measurement data for station %s", id)
             raise
+
+        return written_rows
                     
     def close(self):
         """
