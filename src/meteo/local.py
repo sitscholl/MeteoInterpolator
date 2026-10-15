@@ -44,7 +44,7 @@ class LocalFileMeteoHandler(BaseMeteoHandler):
 
     @property
     def freq(self):
-        return "D"
+        return "10min"
 
     @property
     def inclusive(self):
