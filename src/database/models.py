@@ -30,7 +30,7 @@ class Variable(Base):
 
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False, unique=True)   # e.g. "temperature_2m"
-    unit = Column(String, nullable=False)
+    unit = Column(String, nullable=True)
     description = Column(Text)
 
     measurements = relationship("Measurement", back_populates="variable")
