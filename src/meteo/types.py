@@ -12,6 +12,7 @@ class Station:
     y: float
     crs: int
     elevation: float | None = None
+    name: str | None = None
     data: pd.DataFrame | None = None
 
     def __post_init__(self):
