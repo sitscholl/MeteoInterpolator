@@ -176,7 +176,7 @@ class InterpolationDB:
             new_station = models.Station(id = id, latitude = latitude, longitude = longitude, elevation = elevation, name = name)
             session.add(new_station)
             session.commit()
-            logger.info("New station with id %s for inserted successfully.", id)
+            logger.info("New station with id %s inserted successfully.", id)
             session.refresh(new_station)
             return new_station
         except Exception as e:
