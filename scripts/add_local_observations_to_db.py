@@ -64,16 +64,16 @@ async def _main() -> None:
     logger.info("Starting script to add local observations to db at %s", datetime.now().strftime("%H:%M:%S"))
     logger.info("=" * 50)
 
-    try:
-        config = load_config_file(args.config)
-        local_loader = LocalFileMeteoHandler(
-            station_metadata_path = args.metadata_path,
-            observations_path = args.observations_path,
-            timezone = "UTC",
-        )
-        db_handler = InterpolationDB(**config.get('database', {}))
-        resampler = MeteoResampler(**config['resampling'])
+    config = load_config_file(args.config)
+    local_loader = LocalFileMeteoHandler(
+        station_metadata_path = args.metadata_path,
+        observations_path = args.observations_path,
+        timezone = "UTC",
+    )
+    db_handler = InterpolationDB(**config.get('database', {}))
+    resampler = MeteoResampler(**config['resampling'])
 
+    try:
         dem = load_dem(**config['dem'])
 
         ingestor = MeteoIngestor(
