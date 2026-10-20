@@ -1,13 +1,15 @@
 from .base import BaseMeteoHandler
+from .ingest import MeteoIngestor
 from .local import LocalFileMeteoHandler
 from .province import ProvinceAPI
 from .resample import MeteoResampler
-from .ingest import MeteoIngestor
+from .retrieve import retrieve_stations
 
 __all__ = [
     "BaseMeteoHandler",
     "LocalFileMeteoHandler",
     "MeteoIngestor",
     "MeteoResampler",
-    "ProvinceAPI"
+    "ProvinceAPI",
+    'retrieve_stations'
 ]
