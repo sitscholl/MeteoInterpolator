@@ -32,6 +32,8 @@ dev = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+addopts = "--basetemp=.pytest-tmp"
+cache_dir = ".pytest-cache"
 filterwarnings = [
     "ignore:Consolidated metadata is currently not part in the Zarr format 3 specification:UserWarning",
 ]
