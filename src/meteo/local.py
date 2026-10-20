@@ -204,6 +204,18 @@ class LocalFileMeteoHandler(BaseMeteoHandler):
 
         return {sensor: sorted(station_ids) for sensor, station_ids in result.items()}
 
+    async def get_sensors_for_station(self, station_code: str) -> set[str]:
+        paths = self._build_station_file_map().get(str(station_code), [])
+        supported_codes = set(SENSORS.sensor_maps[self.provider_name])
+
+        available_codes: set[str] = set()
+        for path in paths:
+            available_codes.update(
+                set(self._read_header(path)) & supported_codes
+            )
+
+        return available_codes
+
     async def get_raw_data(
         self,
         station_id: str,

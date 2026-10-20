@@ -100,6 +100,18 @@ class BaseMeteoHandler(ABC):
         pass
 
     @abstractmethod
+    async def get_sensors_for_station(self, station_code: str) -> set[str]:
+        """Return supported provider sensor codes available at this station.
+
+        Exclude identifiers and derived variables.
+        Return an empty set when no supported sensors are available.
+        Network/file errors must propagate.
+
+        Call inside an active handler context.
+        """
+        pass
+
+    @abstractmethod
     async def get_raw_data(self, **kwargs) -> pd.DataFrame:
         """
         Query the raw data from the source.
