@@ -43,6 +43,9 @@ class StationRead(BaseModel):
 class StationCreate(StationRead):
     pass
 
+class DatabaseRefreshSubmission(BaseModel):
+    submitted_at: datetime
+
 class InterpolationRequest(BaseModel):
     param: str
     start: Annotated[datetime, BeforeValidator(parse_datetime)]
