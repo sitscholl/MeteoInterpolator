@@ -1,19 +1,24 @@
-from dataclasses import dataclass
-import logging
+from __future__ import annotations
 
-import pandas as pd
+import logging
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
 import geopandas as gpd
-import xarray as xr
+import pandas as pd
 import rioxarray  # noqa: F401
-from shapely.geometry import Point
+import xarray as xr
 from pyproj import CRS
+from shapely.geometry import Point
 
 from ..aoi import AOI
 from ..domain.dem import DEM
-from ..meteo.base import Station
-from ..domain.schemas import _STATION_DATA_SCHEMA, _OBSERVATION_POINTS_SCHEMA
+from ..domain.schemas import _OBSERVATION_POINTS_SCHEMA, _STATION_DATA_SCHEMA
 from ..interpolate import InterpolationJob
 from ..interpolate.interpolator import _REQUIRED_COLUMNS
+
+if TYPE_CHECKING:
+    from ..meteo.types import Station
 
 logger = logging.getLogger(__name__)
 
