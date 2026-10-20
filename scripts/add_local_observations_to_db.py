@@ -12,15 +12,15 @@ from src.runtime import load_config_file
 logger = logging.getLogger(__name__)
 
 
-from dataclasses import dataclass
-@dataclass
-class Dummy:
-    observations_path = r"C:\Users\tscho\OneDrive - Scientific Network South Tyrol\Daten\StationData\Province\original/*.csv"
-    metadata_path = "data/province/stations.csv"
-    config = "config.example.yaml"
-    verbose = True
+# from dataclasses import dataclass
+# @dataclass
+# class Dummy:
+#     observations_path = r"C:\Users\tscho\OneDrive - Scientific Network South Tyrol\Daten\StationData\Province\original/*.csv"
+#     metadata_path = "data/province/stations.csv"
+#     config = "config.example.yaml"
+#     verbose = True
 
-args = Dummy()
+# args = Dummy()
 
 async def _main() -> None:
     parser = argparse.ArgumentParser(
@@ -64,38 +64,51 @@ async def _main() -> None:
     logger.info("Starting script to add local observations to db at %s", datetime.now().strftime("%H:%M:%S"))
     logger.info("=" * 50)
 
-    config = load_config_file(args.config)
-    local_loader = LocalFileMeteoHandler(
-        station_metadata_path = args.metadata_path,
-        observations_path = args.observations_path,
-        timezone = "Europe/Rome",
-    )
-    db_handler = InterpolationDB(**config.get('database', {}))
-    resampler = MeteoResampler(**config['resampling'])
-
-    dem = load_dem(**config['dem'])
-
-    ingestor = MeteoIngestor(
-        loader = local_loader,
-        database = db_handler,
-        resampler = resampler,
-        default_start_date = datetime(2000, 1, 1, tzinfo = ZoneInfo('UTC')),
-    )
-
-    station_info = await local_loader.get_station_info()
-    for st_id in station_info:
-        refresh_result = await ingestor.upsert_station(
-            station_id = st_id,
-            sensors = ['tair_2m'],
-            dem = dem,
-            update_station_metadata = True,
-            add_missing_variables = True,
+    try:
+        config = load_config_file(args.config)
+        local_loader = LocalFileMeteoHandler(
+            station_metadata_path = args.metadata_path,
+            observations_path = args.observations_path,
+            timezone = "UTC",
         )
-    # ingestor.refresh_database(dem = dem)
+        db_handler = InterpolationDB(**config.get('database', {}))
+        resampler = MeteoResampler(**config['resampling'])
 
-    logger.info("=" * 50)
-    logger.info("Finished adding data to database at %s", datetime.now().strftime("%H:%M:%S"))
-    logger.info("=" * 50)
+        dem = load_dem(**config['dem'])
+
+        ingestor = MeteoIngestor(
+            loader = local_loader,
+            database = db_handler,
+            resampler = resampler,
+            default_start_date = datetime(2000, 1, 1, tzinfo = ZoneInfo('UTC')),
+        )
+
+        station_info = await local_loader.get_station_info()
+
+        results = []
+        for st_id in station_info:
+            refresh_result = await ingestor.upsert_station(
+                station_id = st_id,
+                # sensors = ['tair_2m'],
+                dem = dem,
+                update_station_metadata = True,
+                add_missing_variables = True,
+            )
+            results.append(refresh_result)
+        
+        failed_results = [i for i in results if i.status == 'failed']
+        if failed_results:
+            logger.warning("Ingestion for %s stations failed; check logs", len(failed_results))
+
+        skipped_results = [i for i in results if i.status == 'skipped']
+        if skipped_results:
+            logger.info("Skipped %s stations for insertion into database", len(skipped_results))
+        
+        logger.info("=" * 50)
+        logger.info("Finished adding data to database at %s", datetime.now().strftime("%H:%M:%S"))
+        logger.info("=" * 50)
+    finally:
+        db_handler.close()
 
 
 def main() -> None:
