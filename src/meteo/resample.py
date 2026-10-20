@@ -16,6 +16,7 @@ DEFAULT_RESAMPLE_COLMAP: dict[str, str | list[str]] = {
     "precipitation": "sum",
     "sun_duration": "sum",
     "solar_radiation": "sum",
+    "wind_gust": "max",
 }
 
 class MeteoResampler:
@@ -168,13 +169,12 @@ class MeteoResampler:
         resampled = df.groupby(grouper, dropna=False).agg(**named_aggs)
 
         # 5. Handle Min Sample Size (Efficiently)
-        if min_sample_size > 1:
-            # Count non-NA values for the original columns
-            counts = df.groupby(grouper, dropna=False)[value_cols].count()
-            
-            # For every new column, mask it based on the count of its source column
-            for out_col, (src_col, _) in named_aggs.items():
-                resampled[out_col] = resampled[out_col].where(counts[src_col] >= min_sample_size)
+        # Count non-NA values for the original columns
+        counts = df.groupby(grouper, dropna=False)[value_cols].count()
+        
+        # For every new column, mask it based on the count of its source column
+        for out_col, (src_col, _) in named_aggs.items():
+            resampled[out_col] = resampled[out_col].where(counts[src_col] >= min_sample_size)
 
         # 6. Final Formatting
         resampled = resampled.reset_index()
@@ -218,6 +218,9 @@ class MeteoResampler:
         if groupby_cols is None:
             groupby_cols = ["station_id"]
 
+        if groupby_cols is None:
+            groupby_cols = ["station_id"]
+
         resampled = self.apply_resampling(
             station.data,
             freq=target_freq,
@@ -232,7 +235,8 @@ class MeteoResampler:
             x = station.x,
             y = station.y,
             crs = station.crs,
-            elevation = station.elevation
+            elevation = station.elevation,
+            name=station.name
         )
 
     def resample_meteo_data(
