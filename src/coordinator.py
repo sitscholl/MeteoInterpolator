@@ -339,3 +339,12 @@ class InterpolationCoordinator:
 
         points.attrs["crs"] = dem_crs
         return points
+
+    async def shutdown(self) -> None:
+        tasks = list(self._tasks.values())
+
+        for task in tasks:
+            task.cancel()
+
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._tasks.clear()
