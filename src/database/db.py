@@ -23,6 +23,9 @@ _UPSERT_STATEMENT = _INSERT_STATEMENT.on_conflict_do_update(
 )
 _BATCH_SIZE = 5_000
 
+class StationAlreadyExistsError(ValueError):
+    pass
+
 class InterpolationDB:
 
     def __init__(self, engine: str = 'sqlite:///db/database.db'):
@@ -163,7 +166,9 @@ class InterpolationDB:
         name: str | None = None, 
         ):
         if self.station_exists(id):
-            raise ValueError(f"Station with id {id} already exists in the database")
+            raise StationAlreadyExistsError(
+                f"Station with id {id} already exists"
+            )
 
         latitude, longitude, elevation = validate_station_coordinates(
             latitude,
