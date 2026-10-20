@@ -1,6 +1,8 @@
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import geopandas as gpd
 import yaml
@@ -16,8 +18,7 @@ from .domain.dem import load_dem
 from .domain.schemas import _OBSERVATION_POINTS_SCHEMA
 from .interpolate import BaseDistanceCalculator, DistanceField, Interpolator
 from .interpolate.cv import validate_cross_validation_options
-from .meteo.base import BaseMeteoHandler
-from .meteo.resample import MeteoResampler
+from .meteo import BaseMeteoHandler, MeteoIngestor, MeteoResampler
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +143,7 @@ class RuntimeContext:
         meteo_data_config = dict(config['meteo_data'])
         handler_name = meteo_data_config.pop('handler')
         self.meteo_loader = BaseMeteoHandler.create(handler_name, **meteo_data_config)
-        logger.info(f'Initialized {handler_name} meteo loader')
+        logger.info(f'Initialized meteo loader for {handler_name}.')
 
         ## Stations
         configured_stations = meteo_data_config.get('stations')
@@ -213,13 +214,22 @@ class RuntimeContext:
             logger.info(f"Initialized grid writer with output format {output_format} pointing to {output_target}")
 
         ## Database
-        db_config = config.get('database')
-        self.db = InterpolationDB(**db_config) if db_config is not None else None
-        if db_config is None:
-            logger.info("No database configuration provided. Validation scores will not be persisted")
-        else:
-            logger.info(f"Initialized database connection at {db_config['engine']}")
+        db_config = config.get('database', {})
+        self.db = InterpolationDB(**db_config)
+        logger.info("Initialized database connection at %s", self.db.engine)
+
+        ## Meteo Ingestor
+        self.database_ingestor = MeteoIngestor(
+            loader = self.meteo_loader,
+            database = self.db,
+            resampler = self.resampler,
+            overlap_days = 3,
+            default_start_date = datetime(2020, 1, 1, tzinfo = ZoneInfo('UTC'))
+        )
+        logger.info(f'Initialized meteo ingestor with {handler_name} as source.')
+
         self.initialized = True
+
 
     async def update_runtime(self, config_file: str | Path):
         self.config_file = Path(config_file)

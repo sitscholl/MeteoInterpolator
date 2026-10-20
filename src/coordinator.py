@@ -18,12 +18,14 @@ from pyproj import CRS
 from .api.schemas import InterpolationRequest, InterpolationSubmission
 from .array.writer import GridWriter
 from .domain.meteo_data import MeteoData
+from .meteo import retrieve_stations
 from .execute.base import JobExecutor
 from .execute.serial import SerialExecutor
 from .interpolate import InterpolationJob
 from .runtime import RuntimeContext
 from .utils import get_date_format_from_freq
 from .worker import InterpolationJobResult, process_interpolation_job
+from .meteo.ingest import _INGESTION_FREQ
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +86,8 @@ class InterpolationCoordinator:
             else prediction_target.attrs["crs"]
         )
 
-        stations = await self.context.meteo_loader.get_data_for_stations(
+        stations = retrieve_stations(
+            db = self.context.db,
             station_ids=self.context.station_ids,
             sensor_codes=[request.param],
             start=request.start,
@@ -106,7 +109,7 @@ class InterpolationCoordinator:
         meteo_data = self.context.resampler.resample_meteo_data(
             meteo_data,
             freq=target_freq,
-            source_freq=self.context.meteo_loader.freq,
+            source_freq=_INGESTION_FREQ,
             datetime_col="datetime",
             groupby_cols=["station_id"],
         )
