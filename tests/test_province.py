@@ -1,4 +1,10 @@
 import asyncio
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
+
+import httpx
+import pandas as pd
+import pytest
 
 from src.meteo.province import ProvinceAPI
 
@@ -44,3 +50,85 @@ def test_get_stations_for_sensors_filters_catalogue_by_requested_sensors():
     }
     assert len(client.calls) == 1
     assert client.calls[0][0] == api.sensors_url
+
+
+@pytest.mark.parametrize("failure", ["http", "network", "json"])
+def test_chunk_failure_raises_after_draining_queue_without_returning_partial_data(failure):
+    api = ProvinceAPI(chunk_size_days=1, max_concurrent_requests=1, sleep_time=0)
+    api.station_info = {"station-a": {"id": "station-a", "x": 11, "y": 46}}
+    api.station_sensors = {"station-a": {"LT"}}
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        if len(calls) == 1:
+            if failure == "network":
+                raise httpx.ConnectError("Connection failed", request=request)
+            if failure == "http":
+                return httpx.Response(503, json={"error": "Unavailable"})
+            return httpx.Response(200, text="invalid json")
+        return httpx.Response(200, json=[{"DATE": "2026-01-02T01:00:00CET", "VALUE": 2.0}])
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            api._client = client
+            # Four chunks exceed the queue capacity of two, exercising worker survival.
+            return await asyncio.wait_for(api.get_raw_data(
+                "station-a", datetime(2026, 1, 1, tzinfo=UTC),
+                datetime(2026, 1, 5, tzinfo=UTC), sensor_codes=["tair_2m"],
+            ), timeout=5)
+
+    with pytest.raises(RuntimeError, match="1 request\\(s\\) failed for station station-a") as caught:
+        asyncio.run(run())
+    assert len(calls) == 4
+    assert caught.value.__cause__ is not None
+    if failure == "http":
+        assert isinstance(caught.value.__cause__, httpx.HTTPStatusError)
+    elif failure == "network":
+        assert isinstance(caught.value.__cause__, httpx.ConnectError)
+
+
+def test_successful_empty_api_response_is_not_a_request_failure():
+    api = ProvinceAPI(sleep_time=0)
+    api.station_info = {"station-a": {"id": "station-a", "x": 11, "y": 46}}
+    api.station_sensors = {"station-a": {"LT"}}
+
+    async def run():
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, json=[]))
+        async with httpx.AsyncClient(transport=transport) as client:
+            api._client = client
+            return await api.get_raw_data(
+                "station-a", datetime(2026, 1, 1, tzinfo=UTC),
+                datetime(2026, 1, 2, tzinfo=UTC), sensor_codes=["tair_2m"],
+            )
+
+    data, metadata = asyncio.run(run())
+    assert data is None
+    assert metadata["id"] == "station-a"
+
+
+def test_transform_raises_on_invalid_datetime():
+    raw = pd.DataFrame({
+        "DATE": ["invalidCET"], "station_id": ["station-a"],
+        "sensor": ["LT"], "VALUE": [2.0],
+    })
+    with pytest.raises(ValueError):
+        ProvinceAPI().transform(raw, ZoneInfo("UTC"))
+
+
+@pytest.mark.parametrize("with_temperature", [False, True])
+def test_precipitation_keeps_ten_minute_grid_without_other_sensor_values(with_temperature):
+    raw = pd.DataFrame({
+        "DATE": [f"2026-01-01T00:{minute:02}:00CET" for minute in [0, 5, 10, 15]],
+        "station_id": ["station-a"] * 4,
+        "sensor": ["N"] * 4,
+        "VALUE": [1.0, 2.0, 3.0, 4.0],
+    })
+    if with_temperature:
+        raw = pd.concat([raw, pd.DataFrame({
+            "DATE": ["2026-01-01T00:00:00CET"], "station_id": ["station-a"],
+            "sensor": ["LT"], "VALUE": [5.0],
+        })], ignore_index=True)
+    result = ProvinceAPI().transform(raw, ZoneInfo("UTC"))
+    assert result["datetime"].dt.minute.tolist() == [0, 10]
+    assert result["precipitation"].tolist() == [1.0, 3.0]

@@ -164,8 +164,13 @@ def test_cross_validate_stops_lambda_search_when_improvement_is_below_threshold(
     best_params, best_score = result.get_best_parameters()
 
     assert result.search_stopped is True
-    assert best_params == {"lam_value": 0}
-    assert best_score == pytest.approx(10.0)
+    # The threshold controls when to stop, while selection retains the best
+    # score among all evaluated candidates, including sub-threshold improvements.
+    assert best_params == {"lam_value": 1}
+    assert best_score == pytest.approx(np.sqrt(50.0))
+    scores = result.calculate_fold_scores()
+    assert scores.loc[0] == pytest.approx(10.0)
+    assert 0 < (scores.loc[0] - scores.loc[1]) / scores.loc[0] < 0.6
     assert set(result.fold_results["lam_value"].tolist()) == {0, 1}
 
 

@@ -47,6 +47,7 @@ class _RecordingMeteoLoader(BaseMeteoHandler):
     inclusive = "left"
 
     def __init__(self):
+        super().__init__()
         self.calls = []
         self.sensor_calls = []
         self.entered = 0
@@ -61,6 +62,9 @@ class _RecordingMeteoLoader(BaseMeteoHandler):
     async def get_stations_for_sensors(self, sensors):
         self.sensor_calls.append(list(sensors))
         return {sensor: ["a"] for sensor in sensors}
+
+    async def get_sensors_for_station(self, station_code):
+        return {"tair_2m"} if station_code == "a" else set()
 
     async def get_data(self, **kwargs):
         self.calls.append(kwargs)
