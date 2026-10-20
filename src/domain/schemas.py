@@ -18,6 +18,8 @@ def station_data_schema(timezone: str | None = None) -> pa.DataFrameSchema:
     dtype = f"datetime64[ns, {timezone}]" if timezone is not None else None
     sensor_columns = [
         "tair_2m",
+        "tair_2m_min",
+        "tair_2m_max",
         "relative_humidity",
         "precipitation",
         "wind_speed",

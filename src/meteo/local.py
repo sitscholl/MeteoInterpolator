@@ -89,10 +89,17 @@ class LocalFileMeteoHandler(BaseMeteoHandler):
 
     def _station_ids_for_file(self, path: Path) -> list[str]:
         header = self._read_header(path)
-        if "station_id" not in header:
+        
+        id_column = None
+        if "station_id" in header:
+            id_column = "station_id"
+        elif "st_id" in header:
+            id_column = "st_id"
+
+        if id_column is None:
             return [path.stem]
 
-        ids = pd.read_csv(path, usecols=["station_id"])["station_id"].dropna().astype(str).unique()
+        ids = pd.read_csv(path, usecols=[id_column])[id_column].dropna().astype(str).unique()
         return sorted(ids.tolist())
 
     def _build_station_file_map(self) -> dict[str, list[Path]]:
@@ -110,10 +117,10 @@ class LocalFileMeteoHandler(BaseMeteoHandler):
     def _read_observation_file(self, path: Path) -> pd.DataFrame:
         if path not in self._data_cache:
             data = pd.read_csv(path, na_values=["NA", "NaN", "nan", ""])
+            data.rename(columns=SENSORS.rename_map(self.provider_name), inplace=True)
             if "station_id" not in data.columns:
                 data["station_id"] = path.stem
             data["station_id"] = data["station_id"].astype(str)
-            data.rename(columns=SENSORS.rename_map(self.provider_name), inplace=True)
             self._data_cache[path] = data
         return self._data_cache[path]
 
@@ -231,8 +238,10 @@ class LocalFileMeteoHandler(BaseMeteoHandler):
         
         if data["datetime"].dt.tz is None:
             data["datetime"] = data["datetime"].dt.tz_localize(self.timezone)
-        elif str(data["datetime"].dt.tz) != str(self.timezone):
-            raise ValueError(f"Timezone from loaded data does not match configured timezone. Got {data['datetime'].dt.tz} vs {self.timezone}")
+        elif data["datetime"].dt.tz != str(self.timezone):
+            data['datetime'] = data['datetime'].dt.tz_convert(self.timezone)
+        # elif str(data["datetime"].dt.tz) != str(self.timezone):
+        #     raise ValueError(f"Timezone from loaded data does not match configured timezone. Got {data['datetime'].dt.tz} vs {self.timezone}")
 
         start_ts = self._to_target_timestamp(start, self.timezone)
         end_ts = self._to_target_timestamp(end, self.timezone)

@@ -17,8 +17,13 @@ PROVIDER_SENSOR_MAPS: dict[str, dict[str, str]] = {
         "Q": "discharge",
     },
     "local_file": {
-        "tmean": "tair_2m",
-        "insol": "solar_radiation"
+        "tair": "tair_2m",
+        "rad": "solar_radiation",
+        "relative_air_humidity": "relative_humidity",
+        "preci": "precipitation",
+        "rad_h": "sun_duration",
+        "wind_speed_boe": "wind_gust",
+        "wind_dir": "wind_direction",
     }
 }
 
@@ -27,6 +32,7 @@ PROVIDER_COLUMN_RENAMES: dict[str, dict[str, str]] = {
         "DATE": "datetime",
     },
     "local_file": {
+        "st_id": "station_id",
         "date": "datetime"
     }
 }
