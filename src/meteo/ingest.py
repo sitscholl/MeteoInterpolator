@@ -21,7 +21,7 @@ from .types import Station
 
 logger = logging.getLogger(__name__)
 
-_TARGET_FREQ = 'h'
+_TARGET_FREQ = 'D'
 
 @dataclass
 class StationIngestResult:
@@ -93,9 +93,9 @@ class MeteoIngestor:
         if end is not None:
             if end.tzinfo is None:
                 raise ValueError("End time must be timezone aware")
-            requested_end = pd.Timestamp(end).tz_convert(ZoneInfo('UTC')).floor('h')
+            requested_end = pd.Timestamp(end).tz_convert(ZoneInfo('UTC')).floor(_TARGET_FREQ)
         else:
-            requested_end = pd.Timestamp.now(tz = ZoneInfo('UTC')).floor('h')
+            requested_end = pd.Timestamp.now(tz = ZoneInfo('UTC')).floor(_TARGET_FREQ)
         return requested_end
 
     def _update_elevation(self, station: Station, dem: DEM, overwrite: bool = False) -> Station:
@@ -144,7 +144,7 @@ class MeteoIngestor:
         default_start = pd.Timestamp(self.default_start_date)
         if default_start.tzinfo is None:
             raise ValueError("default_start_date must be timezone aware")
-        default_start = default_start.tz_convert("UTC").floor('h')
+        default_start = default_start.tz_convert("UTC").floor(_TARGET_FREQ)
 
         if not last_rows or any(
             row is None or row.datetime is None
@@ -162,7 +162,7 @@ class MeteoIngestor:
             )
             timestamps.append(timestamp)
 
-        return (min(timestamps) - pd.Timedelta(days=self.overlap_days)).floor('h')
+        return (min(timestamps) - pd.Timedelta(days=self.overlap_days)).floor(_TARGET_FREQ)
 
     async def _get_variables_for_station(
         self,
