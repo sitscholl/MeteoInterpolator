@@ -69,11 +69,14 @@ class InterpolationDB:
 
     def get_data(
             self,
-            station_id: str,
+            station_ids: str | list[str],
             start_time: datetime,
             end_time: datetime | None = None,
             variables: list[str] | None = None,
         ):
+
+        if isinstance(station_ids, str):
+            station_ids = [station_ids]
 
         with self.session_scope() as session:
             query = (
@@ -86,7 +89,7 @@ class InterpolationDB:
                 .join(models.Station, models.Measurement.station_id == models.Station.id)
                 .join(models.Variable, models.Measurement.variable_id == models.Variable.id)
                 .filter(
-                    models.Station.id == station_id,
+                    models.Station.id.in_(station_ids),
                 )
             )
 
