@@ -21,7 +21,8 @@ from .types import Station
 
 logger = logging.getLogger(__name__)
 
-_TARGET_FREQ = 'D'
+##Do not change!! Setting this to daily produces wrong daily aggregates before interpolation!
+_INGESTION_FREQ = 'h'
 
 @dataclass
 class StationIngestResult:
@@ -93,9 +94,9 @@ class MeteoIngestor:
         if end is not None:
             if end.tzinfo is None:
                 raise ValueError("End time must be timezone aware")
-            requested_end = pd.Timestamp(end).tz_convert(ZoneInfo('UTC')).floor(_TARGET_FREQ)
+            requested_end = pd.Timestamp(end).tz_convert(ZoneInfo('UTC')).floor(_INGESTION_FREQ)
         else:
-            requested_end = pd.Timestamp.now(tz = ZoneInfo('UTC')).floor(_TARGET_FREQ)
+            requested_end = pd.Timestamp.now(tz = ZoneInfo('UTC')).floor(_INGESTION_FREQ)
         return requested_end
 
     def _update_elevation(self, station: Station, dem: DEM, overwrite: bool = False) -> Station:
@@ -144,7 +145,7 @@ class MeteoIngestor:
         default_start = pd.Timestamp(self.default_start_date)
         if default_start.tzinfo is None:
             raise ValueError("default_start_date must be timezone aware")
-        default_start = default_start.tz_convert("UTC").floor(_TARGET_FREQ)
+        default_start = default_start.tz_convert("UTC").floor(_INGESTION_FREQ)
 
         if not last_rows or any(
             row is None or row.datetime is None
@@ -162,7 +163,7 @@ class MeteoIngestor:
             )
             timestamps.append(timestamp)
 
-        return (min(timestamps) - pd.Timedelta(days=self.overlap_days)).floor(_TARGET_FREQ)
+        return (min(timestamps) - pd.Timedelta(days=self.overlap_days)).floor(_INGESTION_FREQ)
 
     async def _get_variables_for_station(
         self,
@@ -197,7 +198,7 @@ class MeteoIngestor:
 
             async with context as meteo_loader:
                 source_freq = meteo_loader.freq
-                self._validate_frequency(source_freq, _TARGET_FREQ)
+                self._validate_frequency(source_freq, _INGESTION_FREQ)
 
                 if sensors is None:
                     sensors = sorted(
@@ -264,7 +265,7 @@ class MeteoIngestor:
 
             ##Resample to 1h resolution to reduce database size
             station = self.resampler.resample_station(
-                station, freq = _TARGET_FREQ, datetime_col = 'datetime', source_freq = source_freq,
+                station, freq = _INGESTION_FREQ, datetime_col = 'datetime', source_freq = source_freq,
                 )
 
             station_variables = [i for i in station.data.columns if i not in ['datetime', 'station_id']]
