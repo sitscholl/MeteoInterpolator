@@ -99,11 +99,11 @@ class MeteoIngestor:
         return requested_end
 
     def _update_elevation(self, station: Station, dem: DEM, overwrite: bool = False) -> Station:
-        if not isinstance(dem, DEM):
-            raise TypeError(f"dem must be a DEM. Got {type(dem)}")
-
         if station.elevation is not None and not overwrite:
             return station
+
+        if not isinstance(dem, DEM):
+            raise TypeError(f"dem must be a DEM. Got {type(dem)}")
 
         if station.crs is None or dem.crs is None:
             raise ValueError(f"Cannot update station elevation because both station and the dem need to have a valid crs. Station: {station.crs}, DEM: {dem.crs}")
@@ -176,7 +176,7 @@ class MeteoIngestor:
     async def upsert_station(
         self,
         station_id: str,
-        dem: DEM,
+        dem: DEM | None = None,
         end: datetime | None = None,
         sensors: list[str] | None = None,
         update_station_metadata: bool = False,
@@ -246,7 +246,11 @@ class MeteoIngestor:
                         error = None
                     )
 
-            station = self._update_elevation(station, dem, overwrite=False)
+            if station.elevation is None and dem is None:
+                raise ValueError(f"Station {station.id} has no elevation and no DEM provided. Cannot add data to database")
+            
+            if dem is not None:
+                station = self._update_elevation(station, dem, overwrite=False)
             _ = validate_station_coordinates(station.y, station.x, station.elevation)
 
             if not self.database.station_exists(station_id):
@@ -260,7 +264,7 @@ class MeteoIngestor:
 
             ##Resample to 1h resolution to reduce database size
             station = self.resampler.resample_station(
-                station, freq = _TARGET_FREQ, datetime_col = 'datetime', source_freq = self.loader.freq,
+                station, freq = _TARGET_FREQ, datetime_col = 'datetime', source_freq = source_freq,
                 )
 
             station_variables = [i for i in station.data.columns if i not in ['datetime', 'station_id']]
@@ -293,7 +297,6 @@ class MeteoIngestor:
 
     async def refresh_database(
         self,
-        dem: DEM,
         end: datetime | None = None,
         update_station_metadata: bool = False,
         add_missing_variables: bool = False,
@@ -324,7 +327,6 @@ class MeteoIngestor:
                         station.id, 
                         end = requested_end, 
                         sensors = requested_variables, 
-                        dem = dem, 
                         update_station_metadata=update_station_metadata, 
                         add_missing_variables=add_missing_variables,
                         session = meteo_loader
