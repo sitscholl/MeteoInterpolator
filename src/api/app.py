@@ -1,7 +1,11 @@
+import asyncio
+import datetime
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
@@ -9,6 +13,7 @@ from ..coordinator import InterpolationCoordinator
 from ..database.db import StationAlreadyExistsError
 from ..runtime import RuntimeContext
 from .schemas import (
+    DatabaseRefreshSubmission,
     InterpolationRequest,
     InterpolationSubmission,
     StationCreate,
@@ -17,11 +22,18 @@ from .schemas import (
 
 logger = logging.getLogger(__name__)
 
-CONFIG_PATH = Path(__file__).resolve().parents[2] / "config.example.yaml"
+# Load environment variables from .env file
+load_dotenv()
+
+config_path = os.getenv('CONFIG_FILE')
+if config_path is None:
+    raise ValueError("Missing environment value 'CONFIG_FILE'")
+if not Path(config_path).exists():
+    raise FileNotFoundError(f"Invalid configuration file {config_path}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    runtime = await RuntimeContext.from_config_file(CONFIG_PATH)
+    runtime = await RuntimeContext.from_config_file(config_path)
 
     try:
         if runtime.db is None:
@@ -116,6 +128,15 @@ def add_station_to_database(request: Request, station: StationCreate):
         longitude=new_station.longitude,
         elevation=new_station.elevation,
         name=new_station.name,
+    )
+
+@app.post("/api/refresh", response_model=DatabaseRefreshSubmission)
+async def submit_database_refresh(request: Request):
+    ingestor = request.app.state.runtime.database_ingestor
+    _ = asyncio.create_task(ingestor.refresh_database())
+    
+    return DatabaseRefreshSubmission(
+        submitted_at = datetime.datetime.now(tz = datetime.UTC)
     )
 
 @app.get("/api/interpolate", response_model=InterpolationSubmission)
