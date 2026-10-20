@@ -33,6 +33,15 @@ def validate_timezone(tz: str) -> str:
 
     return tz
 
+class StationRead(BaseModel):
+    id: str
+    longitude: float
+    latitude: float
+    elevation: float
+    name: str | None = None
+
+class StationCreate(StationRead):
+    pass
 
 class InterpolationRequest(BaseModel):
     param: str
