@@ -24,6 +24,8 @@ PROVIDER_SENSOR_MAPS: dict[str, dict[str, str]] = {
         "rad_h": "sun_duration",
         "wind_speed_boe": "wind_gust",
         "wind_dir": "wind_direction",
+        "snow_height": "snow_height",
+        "wind_speed": "wind_speed",
     }
 }
 
