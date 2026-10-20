@@ -243,13 +243,10 @@ class ProvinceAPI(BaseMeteoHandler):
             response_data['station_id'] = station_id
 
             return response_data
-        except Exception as e:
-            logger.error(f"Error fetching data for {sensor} for {query_start} - {query_end}: {e}", exc_info = True)
-            return None
         finally:
             await asyncio.sleep(self.sleep_time)
 
-    async def _worker(self, queue: asyncio.Queue, results: list[pd.DataFrame | None]):
+    async def _worker(self, queue: asyncio.Queue, results: list[pd.DataFrame | None], errors):
         while True:
             job = await queue.get()
 
@@ -263,7 +260,7 @@ class ProvinceAPI(BaseMeteoHandler):
                 if raw_data is not None:
                     results.append(raw_data)
             except Exception as e:
-                logger.error(f"Worker error for station {station_id} with sensor {sensor}: {e}", exc_info=True)
+                errors.append((job, e))
             finally:
                 queue.task_done()
 
@@ -329,8 +326,9 @@ class ProvinceAPI(BaseMeteoHandler):
 
         # Start the workers
         raw_responses = []
+        errors = []
         workers = [
-            asyncio.create_task(self._worker(queue, raw_responses))
+            asyncio.create_task(self._worker(queue, raw_responses, errors))
             for _ in range(self.max_concurrent_requests)
             ]
 
@@ -348,6 +346,15 @@ class ProvinceAPI(BaseMeteoHandler):
 
         # Make sure all workers finish
         await asyncio.gather(*workers)
+
+        # Raise and abort if one of the jobs had an error
+        if errors:
+            job, exc = errors[0]
+            station_id, date_range, sensor = job
+            raise RuntimeError(
+                f"{len(errors)} request(s) failed for station {station_id}; "
+                f"first failure: sensor={sensor}, interval={date_range}"
+            ) from exc
 
         if len(raw_responses) > 0:
             return pd.concat(raw_responses, ignore_index = True), st_metadata
@@ -367,30 +374,27 @@ class ProvinceAPI(BaseMeteoHandler):
         df_pivot = raw_data.pivot(columns = "sensor", values = "VALUE", index = ["DATE", "station_id"]).reset_index()
         df_pivot.rename(columns = SENSORS.rename_map(self.provider_name), inplace = True)
 
-        try:
-            # 1. Capture whether it was Summer Time (CEST) before stripping
-            is_dst = df_pivot['datetime'].str.contains('CEST')
+        # 1. Capture whether it was Summer Time (CEST) before stripping
+        is_dst = df_pivot['datetime'].str.contains('CEST')
 
-            # 2. Strip the strings
-            df_pivot['datetime'] =  df_pivot['datetime'].str.replace('CEST', '', regex=False).str.replace('CET', '', regex=False)
+        # 2. Strip the strings
+        df_pivot['datetime'] =  df_pivot['datetime'].str.replace('CEST', '', regex=False).str.replace('CET', '', regex=False)
 
-            # 3. Convert to naive datetime
-            df_pivot['datetime'] = pd.to_datetime(df_pivot['datetime'], format="%Y-%m-%dT%H:%M:%S")
+        # 3. Convert to naive datetime
+        df_pivot['datetime'] = pd.to_datetime(df_pivot['datetime'], format="%Y-%m-%dT%H:%M:%S")
 
-            # 4. Localize using the mask to resolve ambiguity
-            # ambiguous=is_dst tells pandas: "If this hour repeats, use the DST version if is_dst is True"
-            df_pivot['datetime'] = df_pivot['datetime'].dt.tz_localize(
-                self.timezone, 
-                ambiguous=is_dst,
-                nonexistent='shift_forward' # handle the spring "gap" too
-            ).dt.tz_convert(target_timezone)
-
-            df_pivot['datetime'] = df_pivot['datetime'].dt.floor(self.freq)
-        except Exception as e:
-            logger.error(f"Error transforming datetime: {e}")
+        # 4. Localize using the mask to resolve ambiguity
+        # ambiguous=is_dst tells pandas: "If this hour repeats, use the DST version if is_dst is True"
+        df_pivot['datetime'] = df_pivot['datetime'].dt.tz_localize(
+            self.timezone, 
+            ambiguous=is_dst,
+            nonexistent='shift_forward' # handle the spring "gap" too
+        ).dt.tz_convert(target_timezone)
 
         # Precipitation is available in 5min freq while all others are in 10min freq. Drop additional timestamps for precipitation
-        df_pivot = df_pivot.dropna(subset = [i for i in df_pivot.columns if i not in ['datetime', 'station_id', 'precipitation']], how = 'all')
+        timestamps_utc = df_pivot["datetime"].dt.tz_convert("UTC")
+        on_grid = timestamps_utc.eq(timestamps_utc.dt.floor(self.freq))
+        df_pivot = df_pivot.loc[on_grid].copy()
 
         return df_pivot
 
