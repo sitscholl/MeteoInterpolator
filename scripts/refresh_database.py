@@ -1,12 +1,12 @@
 import argparse
 import asyncio
 import logging
+from dataclasses import replace
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from src.database.db import InterpolationDB
-from src.domain.dem import load_dem
-from src.meteo import LocalFileMeteoHandler, MeteoIngestor, MeteoResampler
+from src.config import MeteoDataConfig
+from src.meteo import MeteoIngestor
 from src.runtime import load_config_file
 
 logger = logging.getLogger(__name__)
@@ -29,14 +29,14 @@ async def _main() -> None:
     parser.add_argument(
         "-f",
         "--observations_path",
-        default="data/province/station_files/*.csv",
-        help='Path to station observation files, possibly include glob patterns'
+        default=None,
+        help='Override meteo_data.loader.observations_path for a local-file loader.'
     )
     parser.add_argument(
         "-m",
         "--metadata_path",
-        default="data/province/stations.csv",
-        help="Path to station metadata file.",
+        default=None,
+        help="Override meteo_data.loader.station_metadata_path for a local-file loader.",
     )
     parser.add_argument(
         "-c",
@@ -65,23 +65,33 @@ async def _main() -> None:
     logger.info("=" * 50)
 
     config = load_config_file(args.config)
-    local_loader = LocalFileMeteoHandler(
-        station_metadata_path = args.metadata_path,
-        observations_path = args.observations_path,
-        timezone = "UTC",
-    )
-    db_handler = InterpolationDB(**config.get('database', {}))
-    resampler = MeteoResampler(**config['resampling'])
+    meteo_config = MeteoDataConfig.from_config(config['meteo_data'])
+    if args.observations_path is not None or args.metadata_path is not None:
+        loader_config = dict(meteo_config.loader_config)
+        if loader_config.get('handler') != 'local_file':
+            raise ValueError('Observation and metadata path overrides require a local_file loader.')
+        if args.observations_path is not None:
+            loader_config['observations_path'] = args.observations_path
+        if args.metadata_path is not None:
+            loader_config['station_metadata_path'] = args.metadata_path
+        meteo_config = replace(meteo_config, loader_config=loader_config)
+    db_handler = meteo_config.create_database_handler()
 
     try:
+        loader = meteo_config.create_meteo_loader()
+        resampler = meteo_config.create_meteo_resampler()
+        ingestor_config = dict(meteo_config.ingestor_config)
+        ingestor_config.setdefault('default_start_date', datetime(2000, 1, 1, tzinfo=ZoneInfo('UTC')))
         ingestor = MeteoIngestor(
-            loader = local_loader,
+            loader = loader,
             database = db_handler,
             resampler = resampler,
-            default_start_date = datetime(2000, 1, 1, tzinfo = ZoneInfo('UTC')),
+            **ingestor_config,
         )
 
         refresh_result = await ingestor.refresh_database(update_station_metadata=False, persist_requested_end=True)
+        if refresh_result.n_failed:
+            logger.warning("Database refresh failed for %s stations; check logs", refresh_result.n_failed)
 
         logger.info("=" * 50)
         logger.info("Finished database refresh at %s", datetime.now().strftime("%H:%M:%S"))

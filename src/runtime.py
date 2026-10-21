@@ -1,8 +1,6 @@
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import geopandas as gpd
 import yaml
@@ -12,13 +10,12 @@ from shapely.geometry import Point
 from .aoi import AOI
 from .array.cache import CacheManager
 from .array.writer import GridWriter
-from .database.db import InterpolationDB
+from .config import MeteoDataConfig
 from .datagaps import Gapfiller
 from .domain.dem import load_dem
 from .domain.schemas import _OBSERVATION_POINTS_SCHEMA
 from .interpolate import BaseDistanceCalculator, DistanceField, Interpolator
 from .interpolate.cv import validate_cross_validation_options
-from .meteo import BaseMeteoHandler, MeteoIngestor, MeteoResampler
 
 logger = logging.getLogger(__name__)
 
@@ -50,39 +47,6 @@ class CrossValidationConfig:
                 improvement_latency_steps=self.improvement_latency_steps,
                 metric=self.select_by,
             )
-
-@dataclass(frozen=True)
-class MeteoDataConfig:
-    loader_config: dict
-    scheduler_config: dict
-    ingestor_config: dict
-    resampler_config: dict
-    database_config: dict
-
-    @classmethod
-    def from_config(cls, config: dict):
-        loader_config = config['meteo_data'].get('loader', {})
-        scheduler_config = config['meteo_data'].get('scheduler', {})
-        ingestor_config = config['meteo_data'].get('database_ingestion', {})
-        resampler_config = config['meteo_Data'].get('resampling', {})
-        database_config = config['meteo_data'].get('database', {})
-
-        return cls(loader_config, scheduler_config, ingestor_config, resampler_config, database_config)
-
-    @property
-    def configured_stations(self):
-        return self.loader_config.get('stations')
-
-    def create_meteo_loader(self) -> BaseMeteoHandler:
-        loader_config = dict(self.loader_config) 
-        handler_name = loader_config.pop('handler')
-        return BaseMeteoHandler.create(handler_name, **loader_config)
-
-    def create_database_handler(self) -> InterpolationDB:
-        return InterpolationDB(**self.database_config)
-
-    def create_meteo_resampler(self) -> MeteoResampler:
-        return MeteoResampler(**self.resampler_config)
 
 @dataclass
 class RuntimeContext:
@@ -158,101 +122,117 @@ class RuntimeContext:
 
     async def initialize_runtime(self, config: dict):
        
-        ## Cache
-        cache_config = config.get("cache", {})
-        cache_enabled = cache_config.get("enabled", True)
-        self.cache_manager = CacheManager(cache_config.get("cache_dir", "data/cache")) if cache_enabled else None
+        self.dem = None
+        self.db = None
 
-        ## DEM
-        dem_config = dict(config['dem'])
-        self.dem = load_dem(**dem_config)
-        logger.info(f"Initialized dem {self.dem}")
+        try:
 
-        ## AOI
-        self.aoi = AOI.from_array(self.dem.data)
-        logger.info(f'Initialized aoi with bounds {self.aoi.bounds}')
+            ## Meteo Config
+            self.meteo_data_config = MeteoDataConfig.from_config(config['meteo_data'])
 
-        ## Meteo Config
-        self.meteo_data_config = MeteoDataConfig.from_config(config['meteo_data'])
+            ## Cache
+            cache_config = config.get("cache", {})
+            cache_enabled = cache_config.get("enabled", True)
+            self.cache_manager = CacheManager(cache_config.get("cache_dir", "data/cache")) if cache_enabled else None
 
-        ## Meteo Loader
-        self.meteo_loader = self.meteo_data_config.create_meteo_loader()
-        logger.info('Initialized meteo loader.')
+            ## DEM
+            dem_config = dict(config['dem'])
+            self.dem = load_dem(**dem_config)
+            logger.info(f"Initialized dem {self.dem}")
 
-        ## Stations
-        configured_stations = self.meteo_data_config.configured_stations()
-        self.station_catalog = await self.build_station_catalog(
-            configured_stations, aoi = self.aoi, crs = CRS.from_user_input(self.dem.crs)
-        )
-        self.station_ids = self.station_catalog.index.astype(str).tolist()
-        logger.info("Initialized %s stations inside dem for interpolation", len(self.station_ids))
+            ## AOI
+            self.aoi = AOI.from_array(self.dem.data)
+            logger.info(f'Initialized aoi with bounds {self.aoi.bounds}')
 
-        ## Meteo resampler
-        self.resampler = self.meteo_data_config.create_meteo_resampler()
-        logger.info("Initialized meteo resampler with min coverage %s", self.resampler.min_coverage)
+            ## Meteo Loader
+            self.meteo_loader = self.meteo_data_config.create_meteo_loader()
+            logger.info('Initialized meteo loader.')
 
-        ## Database
-        self.db = self.meteo_data_config.create_database_handler()
-        logger.info("Initialized database connection at %s", self.db.engine)
-
-        ## Gapfiller
-        gapfiller_config = config.get('gapfilling')
-        self.gapfiller = Gapfiller(**gapfiller_config) if gapfiller_config is not None else None
-        if gapfiller_config is None:
-            logger.info('No gapfiller configuration provided. Gaps will not be filled')
-        else:
-            logger.info("Gapfiller initialized")
-
-        ##Distance Calculator
-        interpolation_config = config['interpolation']
-
-        distance_config = interpolation_config.get('distance')
-        if distance_config is None:
-            self.distance_calculator = None
-        else:
-            distance_config = dict(distance_config)
-            distance_handler = distance_config.pop("type")
-            self.distance_calculator = BaseDistanceCalculator.create(
-                distance_handler,
-                cache_manager=self.cache_manager,
-                **distance_config,
+            ## Stations
+            configured_stations = self.meteo_data_config.configured_stations
+            self.station_catalog = await self.build_station_catalog(
+                configured_stations, aoi = self.aoi, crs = CRS.from_user_input(self.dem.crs)
             )
+            self.station_ids = self.station_catalog.index.astype(str).tolist()
+            logger.info("Initialized %s stations inside dem for interpolation", len(self.station_ids))
 
-        ## Interpolator
-        self.interpolator = Interpolator.from_config(interpolation_config)
+            ## Meteo resampler
+            self.resampler = self.meteo_data_config.create_meteo_resampler()
+            logger.info("Initialized meteo resampler with min coverage %s", self.resampler.min_coverage)
 
-        ## Cross Validation
-        self.cross_validation = CrossValidationConfig(**config.get("cross_validation", {}))
-        if self.cross_validation.enabled:
-            if self.interpolator.residual_model is None:
-                raise ValueError(
-                    "Cross validation tunes lam_value for residual interpolation, "
-                    "but no residual model is configured."
+            ## Database
+            self.db = self.meteo_data_config.create_database_handler()
+            logger.info("Initialized database connection at %s", self.db.engine)
+
+            ## Gapfiller
+            gapfiller_config = config.get('gapfilling')
+            self.gapfiller = Gapfiller(**gapfiller_config) if gapfiller_config is not None else None
+            if gapfiller_config is None:
+                logger.info('No gapfiller configuration provided. Gaps will not be filled')
+            else:
+                logger.info("Gapfiller initialized")
+
+            ##Distance Calculator
+            interpolation_config = config['interpolation']
+
+            distance_config = interpolation_config.get('distance')
+            if distance_config is None:
+                self.distance_calculator = None
+            else:
+                distance_config = dict(distance_config)
+                distance_handler = distance_config.pop("type")
+                self.distance_calculator = BaseDistanceCalculator.create(
+                    distance_handler,
+                    cache_manager=self.cache_manager,
+                    **distance_config,
                 )
-            if self.distance_calculator is None:
-                raise ValueError(
-                    "Cross validation is enabled but no distance calculator is configured."
-                )
 
-        ## Distance fields
-        self.distance_fields = None
-        distance_fields_required = self.cross_validation.enabled or self.interpolator.residual_model is not None
-        if distance_fields_required:
-            self.distance_fields = self.build_distance_fields()
+            ## Interpolator
+            self.interpolator = Interpolator.from_config(interpolation_config)
 
-        ## Grid Writer
-        output_config = config.get('output')
-        if output_config is None:
-            logger.info("No output configuration provided. Results will not be saved")
-            self.grid_writer = None
-        else:
-            output_format = output_config['format']
-            self.grid_writer = GridWriter.create(output_format, **output_config.get('options', {}))
-            output_target = getattr(self.grid_writer, "root", getattr(self.grid_writer, "path", None))
-            logger.info(f"Initialized grid writer with output format {output_format} pointing to {output_target}")
+            ## Cross Validation
+            self.cross_validation = CrossValidationConfig(**config.get("cross_validation", {}))
+            if self.cross_validation.enabled:
+                if self.interpolator.residual_model is None:
+                    raise ValueError(
+                        "Cross validation tunes lam_value for residual interpolation, "
+                        "but no residual model is configured."
+                    )
+                if self.distance_calculator is None:
+                    raise ValueError(
+                        "Cross validation is enabled but no distance calculator is configured."
+                    )
 
-        self.initialized = True
+            ## Distance fields
+            self.distance_fields = None
+            distance_fields_required = self.cross_validation.enabled or self.interpolator.residual_model is not None
+            if distance_fields_required:
+                self.distance_fields = self.build_distance_fields()
 
+            ## Grid Writer
+            output_config = config.get('output')
+            if output_config is None:
+                logger.info("No output configuration provided. Results will not be saved")
+                self.grid_writer = None
+            else:
+                output_format = output_config['format']
+                self.grid_writer = GridWriter.create(output_format, **output_config.get('options', {}))
+                output_target = getattr(self.grid_writer, "root", getattr(self.grid_writer, "path", None))
+                logger.info(f"Initialized grid writer with output format {output_format} pointing to {output_target}")
+
+            self.initialized = True
+
+        except Exception as e:
+            logger.exception("Error during runtime initialization")
+            try:
+                if self.dem is not None:
+                    self.dem.data.close()
+            finally:
+                try:
+                    if self.db is not None:
+                        self.db.close()
+                finally:
+                    raise
 
     async def update_runtime(self, config_file: str | Path):
         self.config_file = Path(config_file)

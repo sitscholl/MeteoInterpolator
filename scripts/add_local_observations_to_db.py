@@ -1,12 +1,13 @@
 import argparse
 import asyncio
 import logging
+from dataclasses import replace
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from src.database.db import InterpolationDB
+from src.config import MeteoDataConfig
 from src.domain.dem import load_dem
-from src.meteo import LocalFileMeteoHandler, MeteoIngestor, MeteoResampler
+from src.meteo import MeteoIngestor
 from src.runtime import load_config_file
 
 logger = logging.getLogger(__name__)
@@ -24,19 +25,19 @@ logger = logging.getLogger(__name__)
 
 async def _main() -> None:
     parser = argparse.ArgumentParser(
-        description="Precompute and cache distance fields for configured interpolation stations."
+        description="Add local station observations to the configured database."
     )
     parser.add_argument(
         "-f",
         "--observations_path",
-        default="data/province/station_files/*.csv",
-        help='Path to station observation files, possibly include glob patterns'
+        default=None,
+        help='Override meteo_data.loader.observations_path; supports glob patterns.'
     )
     parser.add_argument(
         "-m",
         "--metadata_path",
-        default="data/province/stations.csv",
-        help="Path to station metadata file.",
+        default=None,
+        help="Override meteo_data.loader.station_metadata_path.",
     )
     parser.add_argument(
         "-c",
@@ -65,22 +66,32 @@ async def _main() -> None:
     logger.info("=" * 50)
 
     config = load_config_file(args.config)
-    local_loader = LocalFileMeteoHandler(
-        station_metadata_path = args.metadata_path,
-        observations_path = args.observations_path,
-        timezone = "UTC",
-    )
-    db_handler = InterpolationDB(**config.get('database', {}))
-    resampler = MeteoResampler(**config['resampling'])
+    meteo_config = MeteoDataConfig.from_config(config['meteo_data'])
+    loader_config = dict(meteo_config.loader_config)
+    loader_config['handler'] = 'local_file'
+    loader_config.setdefault('observations_path', 'data/province/station_files/*.csv')
+    loader_config.setdefault('station_metadata_path', 'data/province/stations.csv')
+    loader_config.setdefault('timezone', 'UTC')
+    if args.observations_path is not None:
+        loader_config['observations_path'] = args.observations_path
+    if args.metadata_path is not None:
+        loader_config['station_metadata_path'] = args.metadata_path
+    meteo_config = replace(meteo_config, loader_config=loader_config)
+    db_handler = meteo_config.create_database_handler()
 
+    dem = None
     try:
+        local_loader = meteo_config.create_meteo_loader()
+        resampler = meteo_config.create_meteo_resampler()
         dem = load_dem(**config['dem'])
 
+        ingestor_config = dict(meteo_config.ingestor_config)
+        ingestor_config.setdefault('default_start_date', datetime(2000, 1, 1, tzinfo=ZoneInfo('UTC')))
         ingestor = MeteoIngestor(
             loader = local_loader,
             database = db_handler,
             resampler = resampler,
-            default_start_date = datetime(2000, 1, 1, tzinfo = ZoneInfo('UTC')),
+            **ingestor_config,
         )
 
         station_info = await local_loader.get_station_info()
@@ -106,7 +117,11 @@ async def _main() -> None:
         logger.info("Finished adding data to database at %s", datetime.now().strftime("%H:%M:%S"))
         logger.info("=" * 50)
     finally:
-        db_handler.close()
+        try:
+            db_handler.close()
+        finally:
+            if dem is not None:
+                dem.data.close()
 
 
 def main() -> None:

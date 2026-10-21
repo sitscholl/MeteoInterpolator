@@ -165,7 +165,7 @@ def test_station_crs_is_normalized_on_insert_and_update(database):
     )
     assert updated.crs == 4326
     assert updated.name == "Updated station"
-    with pytest.raises(NotImplementedError, match="4326"):
+    with pytest.raises(ValueError, match="4326"):
         database.update_station("station-1", only_missing=False, crs=3857)
     assert database.get_stations("station-1")[0].crs == 4326
 

@@ -5,7 +5,7 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from apscheduler import AsyncIOScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
@@ -24,23 +24,25 @@ from .schemas import (
 
 logger = logging.getLogger(__name__)
 
-# Load environment variables from .env file
-load_dotenv()
-
-config_path = os.getenv('CONFIG_FILE')
-if config_path is None:
-    raise ValueError("Missing environment value 'CONFIG_FILE'")
-if not Path(config_path).exists():
-    raise FileNotFoundError(f"Invalid configuration file {config_path}")
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Load environment variables from .env file
+    load_dotenv()
+
+    config_path = os.getenv('CONFIG_FILE')
+    if config_path is None:
+        raise ValueError("Missing environment value 'CONFIG_FILE'")
+    if not Path(config_path).exists():
+        raise FileNotFoundError(f"Invalid configuration file {config_path}")
+
     runtime = await RuntimeContext.from_config_file(config_path)
 
+    coordinator = None
+    scheduler = None
     try:
         coordinator = InterpolationCoordinator(runtime)
 
-        scheduler = AsyncIOScheduler()
+        scheduler = BackgroundScheduler(timezone = 'UTC')
         scheduler.add_job(
             run_database_refresh,
             kwargs={'config': runtime.meteo_data_config},
@@ -57,14 +59,22 @@ async def lifespan(app: FastAPI):
         app.state.coordinator = coordinator
         app.state.scheduler = scheduler
 
-        try:
-            yield
-        finally:
-            await coordinator.shutdown()
+        yield
+    
     finally:
-        runtime.db.close()
-        scheduler.shutdown()
-        runtime.dem.data.close()
+        try:
+            if scheduler is not None and scheduler.running:
+                scheduler.pause()
+                await asyncio.to_thread(scheduler.shutdown, wait=True)
+        finally:
+            try:
+                if coordinator is not None:
+                    await coordinator.shutdown()
+            finally:
+                try:
+                    runtime.db.close()
+                finally:
+                    runtime.dem.data.close()
 
 
 app = FastAPI(
@@ -146,13 +156,15 @@ def add_station_to_database(request: Request, station: StationCreate):
 
 @app.post("/api/refresh", response_model=DatabaseRefreshSubmission, status_code=status.HTTP_202_ACCEPTED)
 async def submit_database_refresh(request: Request):
+
+    now_dt = datetime.datetime.now(datetime.UTC)
     request.app.state.scheduler.modify_job(
         "database_refresh",
-        next_run_time=datetime.now("UTC"),
+        next_run_time=now_dt,
     )
 
     return DatabaseRefreshSubmission(
-        submitted_at = datetime.datetime.now(tz = datetime.UTC)
+        submitted_at=now_dt
     )
 
 @app.get("/api/interpolate", response_model=InterpolationSubmission)
