@@ -1,22 +1,43 @@
-import pandas as pd
-
 import logging
 import math
-from typing import Any
 from collections.abc import Callable, Iterable
+from typing import Any
 
-from .types import Station
+import numpy as np
+import pandas as pd
+from scipy.stats import circmean
+
 from ..domain.meteo_data import MeteoData
+from .types import Station
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_RESAMPLE_COLMAP: dict[str, str | list[str]] = {
+def _average_wind_direction(samples):
+    angles = samples.dropna().to_numpy(dtype=float)
+    if angles.size == 0:
+        return np.nan
+
+    radians = np.deg2rad(angles)
+    resultant = np.hypot(
+        np.cos(radians).mean(),
+        np.sin(radians).mean(),
+    )
+
+    #if completely opposing directions cancel each other out, return np.nan
+    if resultant < 1e-12:
+        return np.nan
+
+    return float(circmean(angles, low=0, high=360)) % 360
+
+DEFAULT_RESAMPLE_COLMAP: dict[str, str | list[str] | Callable] = {
     "tair_2m": ["mean", 'min', 'max'],
     "relative_humidity": "mean",
     "precipitation": "sum",
-    "sun_duration": "sum",
-    "solar_radiation": "sum",
+    "sun_duration": "sum", #in seconds
+    "solar_radiation": "mean", # in W/m²
     "wind_gust": "max",
+    "wind_speed": "mean",
+    "wind_direction": _average_wind_direction #in degree
 }
 
 class MeteoResampler:
