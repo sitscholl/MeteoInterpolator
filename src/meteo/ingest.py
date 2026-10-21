@@ -90,6 +90,13 @@ class MeteoIngestor:
                 f"Raw data must have intervals no longer than {target_freq}."
             )
 
+    def _validate_start(self, start: datetime | None):
+        if start is None:
+            return start
+        if start.tzinfo is None:
+            raise ValueError("Start time must be timezone aware")
+        return pd.Timestamp(start).tz_convert(ZoneInfo('UTC')).floor(_INGESTION_FREQ)
+
     def _validate_end(self, end: datetime):
         if end is not None:
             if end.tzinfo is None:
@@ -178,11 +185,13 @@ class MeteoIngestor:
         self,
         station_id: str,
         dem: DEM | None = None,
+        start: datetime | None = None,
         end: datetime | None = None,
         sensors: list[str] | None = None,
         update_station_metadata: bool = False,
         add_missing_variables: bool = True,
         session: BaseMeteoHandler | None = None,
+        persist_requested_end: bool = False,
     ) -> StationIngestResult:
         if sensors is not None and isinstance(sensors, str):
             sensors = [sensors]
@@ -207,20 +216,22 @@ class MeteoIngestor:
                         )
                     )
 
+                requested_start = self._validate_start(start)
                 requested_end = self._validate_end(end)
 
                 if not sensors:
                     return StationIngestResult(
                         station_id=station_id,
                         status="skipped",
-                        requested_start=None,
+                        requested_start=requested_start,
                         requested_end=requested_end,
                     )
 
-                last_rows = self.database.get_last_row_per_variable(
-                    station_id, sensors
-                )
-                requested_start = self._get_start_date(last_rows)
+                if requested_start is None:
+                    last_rows = self.database.get_last_row_per_variable(
+                        station_id, sensors
+                    )
+                    requested_start = self._get_start_date(last_rows)
 
                 if requested_end <= requested_start:
                     raise ValueError(
@@ -235,17 +246,6 @@ class MeteoIngestor:
                     end=requested_end,
                     target_timezone=ZoneInfo("UTC"),
                 )
-
-            if station.data is None:
-                logger.warning("No data found for station %s. Skipping database insertion", station_id)
-                return StationIngestResult(
-                        station_id = station_id,
-                        status = 'skipped',
-                        requested_start = requested_start,
-                        requested_end = requested_end,
-                        observations_written = 0,
-                        error = None
-                    )
 
             if station.elevation is None and dem is None:
                 raise ValueError(f"Station {station.id} has no elevation and no DEM provided. Cannot add data to database")
@@ -263,6 +263,21 @@ class MeteoIngestor:
                     id = station.id, latitude = station.y, longitude = station.x, elevation = station.elevation, name = station.name, only_missing = False
                 )
 
+            if station.data is None:
+                logger.warning("No data found for station %s. Skipping database insertion", station_id)
+                if persist_requested_end:
+                    self.database.log_ingestion_task(
+                        station_id = station.id, requested_start = requested_start, requested_end = requested_end, status = "completed",
+                    )
+                return StationIngestResult(
+                        station_id = station_id,
+                        status = 'completed',
+                        requested_start = requested_start,
+                        requested_end = requested_end,
+                        observations_written = 0,
+                        error = None
+                    )
+
             ##Resample to 1h resolution to reduce database size
             station = self.resampler.resample_station(
                 station, freq = _INGESTION_FREQ, datetime_col = 'datetime', source_freq = source_freq,
@@ -277,7 +292,7 @@ class MeteoIngestor:
             
             written_rows = self.database.add_station_data(id = station.id, data = station.data, ignore_missing_variables = True)
 
-            return StationIngestResult(
+            result = StationIngestResult(
                 station_id = station.id,
                 status = 'completed',
                 requested_start = requested_start,
@@ -285,6 +300,11 @@ class MeteoIngestor:
                 observations_written = written_rows,
                 error = None
             )
+            if persist_requested_end:
+                self.database.log_ingestion_task(
+                    station_id = station.id, requested_start = requested_start, requested_end = requested_end, status = result.status,
+                )
+            return result
         except Exception as e:
             logger.exception("Refreshing station failed")
             return StationIngestResult(
@@ -301,6 +321,7 @@ class MeteoIngestor:
         end: datetime | None = None,
         update_station_metadata: bool = False,
         add_missing_variables: bool = False,
+        persist_requested_end: bool = False,
     ):
         ##Query station_ids and sensor_codes from database and refresh them all
         requested_end = self._validate_end(end)     
@@ -313,6 +334,15 @@ class MeteoIngestor:
                 try:
                     station_variables = await self._get_variables_for_station(station.id, session = meteo_loader)
                     requested_variables = sorted(station_variables & database_variables) #drops derived variables, such as tair_2m_max...
+                
+                    last_refresh_task = self.database.get_last_ingestion_task(station.id)
+                    if last_refresh_task is not None:
+                        last_refresh_end = pd.Timestamp(last_refresh_task.requested_end) - pd.Timedelta(days=self.overlap_days)
+                        if last_refresh_end.tz is None:
+                            last_refresh_end = last_refresh_end.tz_localize('UTC')
+                    else:
+                        last_refresh_end = None
+
                 except Exception as e:
                     logger.exception(f"Database refresh failed for station {station.id}")
                     ingest_result = StationIngestResult(
@@ -326,12 +356,15 @@ class MeteoIngestor:
                 else:
                     ingest_result = await self.upsert_station(
                         station.id, 
+                        start = last_refresh_end,
                         end = requested_end, 
                         sensors = requested_variables, 
                         update_station_metadata=update_station_metadata, 
                         add_missing_variables=add_missing_variables,
-                        session = meteo_loader
+                        session = meteo_loader,
+                        persist_requested_end=persist_requested_end
                     )
+
                 results.append(ingest_result)
 
         refresh_result = DatabaseRefreshResult(results)
