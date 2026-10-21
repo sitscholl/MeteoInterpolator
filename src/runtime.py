@@ -51,6 +51,39 @@ class CrossValidationConfig:
                 metric=self.select_by,
             )
 
+@dataclass(frozen=True)
+class MeteoDataConfig:
+    loader_config: dict
+    scheduler_config: dict
+    ingestor_config: dict
+    resampler_config: dict
+    database_config: dict
+
+    @classmethod
+    def from_config(cls, config: dict):
+        loader_config = config['meteo_data'].get('loader', {})
+        scheduler_config = config['meteo_data'].get('scheduler', {})
+        ingestor_config = config['meteo_data'].get('database_ingestion', {})
+        resampler_config = config['meteo_Data'].get('resampling', {})
+        database_config = config['meteo_data'].get('database', {})
+
+        return cls(loader_config, scheduler_config, ingestor_config, resampler_config, database_config)
+
+    @property
+    def configured_stations(self):
+        return self.loader_config.get('stations')
+
+    def create_meteo_loader(self) -> BaseMeteoHandler:
+        loader_config = dict(self.loader_config) 
+        handler_name = loader_config.pop('handler')
+        return BaseMeteoHandler.create(handler_name, **loader_config)
+
+    def create_database_handler(self) -> InterpolationDB:
+        return InterpolationDB(**self.database_config)
+
+    def create_meteo_resampler(self) -> MeteoResampler:
+        return MeteoResampler(**self.resampler_config)
+
 @dataclass
 class RuntimeContext:
     config: dict
@@ -139,14 +172,15 @@ class RuntimeContext:
         self.aoi = AOI.from_array(self.dem.data)
         logger.info(f'Initialized aoi with bounds {self.aoi.bounds}')
 
+        ## Meteo Config
+        self.meteo_data_config = MeteoDataConfig.from_config(config['meteo_data'])
+
         ## Meteo Loader
-        meteo_data_config = dict(config['meteo_data'])
-        handler_name = meteo_data_config.pop('handler')
-        self.meteo_loader = BaseMeteoHandler.create(handler_name, **meteo_data_config)
-        logger.info(f'Initialized meteo loader for {handler_name}.')
+        self.meteo_loader = self.meteo_data_config.create_meteo_loader()
+        logger.info('Initialized meteo loader.')
 
         ## Stations
-        configured_stations = meteo_data_config.get('stations')
+        configured_stations = self.meteo_data_config.configured_stations()
         self.station_catalog = await self.build_station_catalog(
             configured_stations, aoi = self.aoi, crs = CRS.from_user_input(self.dem.crs)
         )
@@ -154,8 +188,12 @@ class RuntimeContext:
         logger.info("Initialized %s stations inside dem for interpolation", len(self.station_ids))
 
         ## Meteo resampler
-        resampler_config = config.get('resampling', {})
-        self.resampler = MeteoResampler(**resampler_config)
+        self.resampler = self.meteo_data_config.create_meteo_resampler()
+        logger.info("Initialized meteo resampler with min coverage %s", self.resampler.min_coverage)
+
+        ## Database
+        self.db = self.meteo_data_config.create_database_handler()
+        logger.info("Initialized database connection at %s", self.db.engine)
 
         ## Gapfiller
         gapfiller_config = config.get('gapfilling')
@@ -212,21 +250,6 @@ class RuntimeContext:
             self.grid_writer = GridWriter.create(output_format, **output_config.get('options', {}))
             output_target = getattr(self.grid_writer, "root", getattr(self.grid_writer, "path", None))
             logger.info(f"Initialized grid writer with output format {output_format} pointing to {output_target}")
-
-        ## Database
-        db_config = config.get('database', {})
-        self.db = InterpolationDB(**db_config)
-        logger.info("Initialized database connection at %s", self.db.engine)
-
-        ## Meteo Ingestor
-        self.database_ingestor = MeteoIngestor(
-            loader = self.meteo_loader,
-            database = self.db,
-            resampler = self.resampler,
-            overlap_days = 3,
-            default_start_date = datetime(2020, 1, 1, tzinfo = ZoneInfo('UTC'))
-        )
-        logger.info(f'Initialized meteo ingestor with {handler_name} as source.')
 
         self.initialized = True
 

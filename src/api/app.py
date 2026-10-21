@@ -5,12 +5,14 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from apscheduler import AsyncIOScheduler
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
 from ..coordinator import InterpolationCoordinator
 from ..database.db import StationAlreadyExistsError
+from ..jobs.database_refresh import run_database_refresh
 from ..runtime import RuntimeContext
 from .schemas import (
     DatabaseRefreshSubmission,
@@ -36,22 +38,32 @@ async def lifespan(app: FastAPI):
     runtime = await RuntimeContext.from_config_file(config_path)
 
     try:
-        if runtime.db is None:
-            raise RuntimeError(
-                "The station API requires database configuration"
-            )
-
         coordinator = InterpolationCoordinator(runtime)
+
+        scheduler = AsyncIOScheduler()
+        scheduler.add_job(
+            run_database_refresh,
+            kwargs={'config': runtime.meteo_data_config},
+            trigger = 'cron',
+            timezone = 'UTC',
+            id='database_refresh',
+            max_instances=1,
+            coalesce=True,
+            **runtime.meteo_data_config.scheduler_config
+        )
+        scheduler.start()
+
         app.state.runtime = runtime
         app.state.coordinator = coordinator
+        app.state.scheduler = scheduler
 
         try:
             yield
         finally:
             await coordinator.shutdown()
     finally:
-        if runtime.db is not None:
-            runtime.db.close()
+        runtime.db.close()
+        scheduler.shutdown()
         runtime.dem.data.close()
 
 
@@ -132,14 +144,16 @@ def add_station_to_database(request: Request, station: StationCreate):
         name=new_station.name,
     )
 
-# @app.post("/api/refresh", response_model=DatabaseRefreshSubmission)
-# async def submit_database_refresh(request: Request):
-#     ingestor = request.app.state.runtime.database_ingestor
-#     _ = asyncio.create_task(ingestor.refresh_database(persist_requested_end=True))
-    
-#     return DatabaseRefreshSubmission(
-#         submitted_at = datetime.datetime.now(tz = datetime.UTC)
-#     )
+@app.post("/api/refresh", response_model=DatabaseRefreshSubmission, status_code=status.HTTP_202_ACCEPTED)
+async def submit_database_refresh(request: Request):
+    request.app.state.scheduler.modify_job(
+        "database_refresh",
+        next_run_time=datetime.now("UTC"),
+    )
+
+    return DatabaseRefreshSubmission(
+        submitted_at = datetime.datetime.now(tz = datetime.UTC)
+    )
 
 @app.get("/api/interpolate", response_model=InterpolationSubmission)
 async def interpolate(
