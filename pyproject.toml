@@ -24,6 +24,7 @@ dependencies = [
     "fastapi>=0.140.0",
     "sqlalchemy>=2.1.4",
     "python-dotenv>=1.2.4",
+    "apscheduler>=3.11.3",
 ]
 
 [dependency-groups]
