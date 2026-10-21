@@ -14,6 +14,20 @@ from ..utils import split_dates
 
 logger = logging.getLogger(__name__)
 
+###Sensor description for ProvinceAPI
+# LT = Lufttemperatur in °C
+# LF = Luftfeuchte in %
+# N = Niederschlag in mm
+# WG = mittlere Windgeschwindigkeit in m/s
+# WR = mittlere Windrichtung in Grad
+# WG.BOE = Windböe in m/s
+# LD.RED = reduzierter Luftdruck in hPa
+# SD = Sonnenscheindauer in Sekunden
+# GS = Globalstrahlung in W/m²
+# HS = Schneehöhe in cm
+# W = Wasserstand in cm
+# Q = Durchfluss in m³/s
+
 class ProvinceAPI(BaseMeteoHandler):
 
     provider_name = 'province_api'
