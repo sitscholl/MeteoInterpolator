@@ -206,12 +206,26 @@ class LocalFileMeteoHandler(BaseMeteoHandler):
 
     async def get_sensors_for_station(self, station_code: str) -> set[str]:
         paths = self._build_station_file_map().get(str(station_code), [])
-        supported_codes = set(SENSORS.sensor_maps[self.provider_name])
 
-        available_codes: set[str] = set()
+        if not paths:
+            logger.debug(
+                "No observation files for station %s",
+                station_code,
+            )
+            return set()
+
+        supported_codes = set(SENSORS.sensor_maps[self.provider_name])
+        available_codes = set()
+
         for path in paths:
             available_codes.update(
                 set(self._read_header(path)) & supported_codes
+            )
+
+        if not available_codes:
+            logger.warning(
+                "Observation files for station %s contain no supported sensor columns",
+                station_code,
             )
 
         return available_codes

@@ -201,7 +201,7 @@ class MeteoIngestor:
                 requested_end = self._validate_end(end)
 
                 if not valid_sensors:
-                    logger.warning(f"No valid sensors for station {station_id}. Skipping database upsert.")
+                    logger.debug("Skipping station %s: no supported sensors available",station_id)
                     return StationIngestResult(
                         station_id=station_id,
                         status="skipped",
