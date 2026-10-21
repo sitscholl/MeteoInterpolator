@@ -290,9 +290,21 @@ class MeteoIngestor:
                 for var in variables_not_in_db:
                     self.database.add_variable(name = var)
             
-            written_rows = self.database.add_station_data(id = station.id, data = station.data, ignore_missing_variables = True)
+            with self.database.Session.begin() as db_session:
+                
+                written_rows = self.database.add_station_data(
+                    id = station.id, data = station.data, ignore_missing_variables = True, db_session=db_session
+                    )
+                if persist_requested_end:
+                    self.database.log_ingestion_task(
+                        station_id = station.id, 
+                        requested_start = requested_start, 
+                        requested_end = requested_end, 
+                        status = "completed",
+                        db_session=db_session
+                    )
 
-            result = StationIngestResult(
+            return StationIngestResult(
                 station_id = station.id,
                 status = 'completed',
                 requested_start = requested_start,
@@ -300,11 +312,7 @@ class MeteoIngestor:
                 observations_written = written_rows,
                 error = None
             )
-            if persist_requested_end:
-                self.database.log_ingestion_task(
-                    station_id = station.id, requested_start = requested_start, requested_end = requested_end, status = result.status,
-                )
-            return result
+
         except Exception as e:
             logger.exception("Refreshing station failed")
             return StationIngestResult(

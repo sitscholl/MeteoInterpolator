@@ -1,15 +1,14 @@
 import logging
-import math
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
 
 import pandas as pd
 from sqlalchemy import create_engine, event
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
+from ..utils import to_utc_timestamp, validate_station_coordinates
 from . import models
-from ..utils import validate_station_coordinates, to_utc_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +262,7 @@ class InterpolationDB:
         id: str,
         data: pd.DataFrame, 
         ignore_missing_variables: bool = False,
+        db_session: Session | None = None
         ):
 
         if data.empty:
@@ -334,53 +334,56 @@ class InterpolationDB:
             keep="last",
         )
 
+        transaction = (
+            self.Session.begin()
+            if db_session is None
+            else nullcontext(db_session)
+        )
+
         written_rows = 0
-        try:
-            with self.Session.begin() as session:
-                for start in range(0, len(measurements), _BATCH_SIZE):
-                    batch = measurements.iloc[start : start + _BATCH_SIZE]
-                    session.execute(
-                        _UPSERT_STATEMENT,
-                        batch.to_dict(orient="records"),
-                    )
-                    written_rows += len(batch)
-            logger.debug("Upserted %s measurements for station %s and %s variables.", len(measurements), id, len(active_variables))
-        except Exception as e:
-            logger.exception("Error upserting bulk measurement data for station %s", id)
-            raise
+        with transaction as session:
+            for start in range(0, len(measurements), _BATCH_SIZE):
+                batch = measurements.iloc[start : start + _BATCH_SIZE]
+                session.execute(
+                    _UPSERT_STATEMENT,
+                    batch.to_dict(orient="records"),
+                )
+                written_rows += len(batch)
 
         return written_rows
 
     def log_ingestion_task(
-        self, station_id: str, requested_start: datetime, requested_end: datetime, status: str
+        self, station_id: str, requested_start: datetime, requested_end: datetime, status: str, db_session: Session | None = None
     ):
-        stations = self.get_stations(station_id)
-        if not stations:
-            raise ValueError(f"No station with id {station_id} in database")
-        else:
-            station = stations[0]
 
-        if status not in ['completed', 'skipped', 'failed']:
+        if status not in {'completed', 'skipped', 'failed'}:
             raise ValueError(f"Invalid status {status}")
 
         requested_start = to_utc_timestamp(requested_start)
         requested_end = to_utc_timestamp(requested_end)
+        if requested_start >= requested_end:
+            raise ValueError("requested_start must precede requested_end")
 
-        session = self.Session()
-        try:
-            new_entry = models.IngestionRequest(
-                station_id = station.id, requested_start = requested_start, requested_end = requested_end, status = status)
-            session.add(new_entry)
-            session.commit()
-            logger.info("New ingestion request for station %s inserted successfully.", station.id)
-            session.refresh(new_entry)
-            return new_entry
-        except Exception as e: 
-            session.rollback()
-            logger.exception("Error inserting ingestion request for station %s", station.id)
-            raise
-        finally:
-            session.close()
+        transaction = (
+            self.Session.begin() 
+            if db_session is None
+            else nullcontext(db_session)
+        )
+
+        with transaction as session:
+            if session.get(models.Station, station_id) is None:
+                raise ValueError(f"No station with id {station_id} in database")
+
+            entry = models.IngestionRequest(
+                station_id=station_id,
+                requested_start=requested_start,
+                requested_end=requested_end,
+                status=status,
+            )
+            session.add(entry)
+            session.flush()
+
+        return entry
    
     def get_last_ingestion_task(self, station_id: str, status: str = 'completed'):
         with self.session_scope() as session:
