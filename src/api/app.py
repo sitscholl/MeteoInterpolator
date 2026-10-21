@@ -130,14 +130,14 @@ def add_station_to_database(request: Request, station: StationCreate):
         name=new_station.name,
     )
 
-@app.post("/api/refresh", response_model=DatabaseRefreshSubmission)
-async def submit_database_refresh(request: Request):
-    ingestor = request.app.state.runtime.database_ingestor
-    _ = asyncio.create_task(ingestor.refresh_database())
+# @app.post("/api/refresh", response_model=DatabaseRefreshSubmission)
+# async def submit_database_refresh(request: Request):
+#     ingestor = request.app.state.runtime.database_ingestor
+#     _ = asyncio.create_task(ingestor.refresh_database(persist_requested_end=True))
     
-    return DatabaseRefreshSubmission(
-        submitted_at = datetime.datetime.now(tz = datetime.UTC)
-    )
+#     return DatabaseRefreshSubmission(
+#         submitted_at = datetime.datetime.now(tz = datetime.UTC)
+#     )
 
 @app.get("/api/interpolate", response_model=InterpolationSubmission)
 async def interpolate(
