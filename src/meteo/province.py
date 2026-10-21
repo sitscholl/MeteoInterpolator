@@ -1,16 +1,16 @@
-from zoneinfo import ZoneInfo
-import pandas as pd
 import asyncio
-import httpx
-
 import datetime
-import pytz
-from typing import Dict, Any, Tuple
 import logging
+from typing import Any
+from zoneinfo import ZoneInfo
 
+import httpx
+import pandas as pd
+import pytz
+
+from ..utils import split_dates
 from .base import BaseMeteoHandler
 from .sensors import SENSORS
-from ..utils import split_dates
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +166,7 @@ class ProvinceAPI(BaseMeteoHandler):
             info = await self.get_station_info()
             return list(info.keys())
         
-    async def get_station_info(self, station_id: str | None = None) -> Dict[str, Any]:
+    async def get_station_info(self, station_id: str | None = None) -> dict[str, Any]:
         if self.station_info is not None:
             if station_id is not None:
                 return self.station_info.get(station_id, {})
@@ -227,7 +227,7 @@ class ProvinceAPI(BaseMeteoHandler):
         return normalized
         
     async def _create_request_task(
-        self, station_id: str, date_range: Tuple[datetime, datetime], sensor: str
+        self, station_id: str, date_range: tuple[datetime, datetime], sensor: str
         ):
 
         if self._client is None:
@@ -405,12 +405,33 @@ class ProvinceAPI(BaseMeteoHandler):
             nonexistent='shift_forward' # handle the spring "gap" too
         ).dt.tz_convert(target_timezone)
 
-        # Precipitation is available in 5min freq while all others are in 10min freq. Drop additional timestamps for precipitation
+        # Precipitation is available in 5min freq while all others are in 10min freq. Aggregate
         timestamps_utc = df_pivot["datetime"].dt.tz_convert("UTC")
         on_grid = timestamps_utc.eq(timestamps_utc.dt.floor(self.freq))
-        df_pivot = df_pivot.loc[on_grid].copy()
 
-        return df_pivot
+        result = df_pivot.loc[on_grid].copy()
+
+        if "precipitation" in df_pivot.columns:
+            rain = (
+                df_pivot.assign(
+                    datetime=df_pivot["datetime"].dt.tz_convert("UTC")
+                )
+                .set_index("datetime")
+                .groupby("station_id")["precipitation"]
+                .resample(self.freq, closed="right", label="right")
+                .sum(min_count=1)
+                .reset_index()
+            )
+            rain["datetime"] = rain["datetime"].dt.tz_convert(target_timezone)
+
+            result = result.drop(columns="precipitation").merge(
+                rain,
+                on=["station_id", "datetime"],
+                how="outer",
+                validate="one_to_one",
+            )
+
+        return result.sort_values(["datetime", "station_id"]).reset_index(drop=True)
 
 if __name__ == '__main__':
     
