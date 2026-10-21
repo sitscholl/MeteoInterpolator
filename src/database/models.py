@@ -23,6 +23,7 @@ class Station(Base):
     elevation = Column(Float, nullable=False)
 
     measurements = relationship("Measurement", back_populates="station")
+    ingestion_requests = relationship("IngestionRequest", back_populates="station")
 
 
 class Variable(Base):
@@ -56,5 +57,23 @@ class Measurement(Base):
             "variable_id",
             "datetime",
             "station_id",
+        ),
+    )
+
+class IngestionRequest(Base):
+    __tablename__ = 'ingestion_requests'
+
+    id = Column(Integer, primary_key=True)
+    requested_start = Column(DateTime(timezone=True), nullable = False)
+    requested_end = Column(DateTime(timezone=True), nullable = False)
+    status = Column(String, nullable = False)
+    station_id = Column(String, ForeignKey("stations.id", onupdate="CASCADE", ondelete='CASCADE'), nullable=False)
+
+    station = relationship("Station", back_populates="ingestion_requests")
+
+    __table_args__ = (
+        Index(
+            "ix_ingestion_station_status_end",
+            "station_id", "status", "requested_end",
         ),
     )
