@@ -4,6 +4,7 @@ import math
 
 import pandas as pd
 from pandas.tseries.frequencies import to_offset
+from pyproj import CRS
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +139,24 @@ def validate_station_coordinates(
         numeric_values["longitude"],
         numeric_values["elevation"],
     )
+
+def validate_crs(crs: int):
+    if not isinstance(crs, int):
+        try:
+            crs = int(crs)
+        except Exception as e:
+            logger.exception(f"crs object should be of type int, got {type(crs)}")
+            raise
+
+    if crs != 4326:
+        raise ValueError(f"Stations currently can only have a crs of 4326. Got {crs}")
+
+    try:
+        _ = CRS.from_epsg(crs)
+    except Exception as e:
+        logger.exception(f"Invalid crs object: {crs}")
+        raise
+    return crs
 
 def to_utc_timestamp(input: datetime.datetime | pd.Timestamp | str, raise_missing_timezone: bool = False):
     

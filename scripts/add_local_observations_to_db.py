@@ -89,10 +89,8 @@ async def _main() -> None:
         for st_id in station_info:
             refresh_result = await ingestor.upsert_station(
                 station_id = st_id,
-                # sensors = ['tair_2m'],
                 dem = dem,
                 update_station_metadata = True,
-                add_missing_variables = True,
             )
             results.append(refresh_result)
         

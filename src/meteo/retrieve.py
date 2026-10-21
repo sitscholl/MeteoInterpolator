@@ -2,6 +2,7 @@ from datetime import datetime
 from pandas import Timestamp
 
 from ..database.db import InterpolationDB
+from ..database.models import DATABASE_VARIABLES
 from .types import Station
 from ..utils import to_utc_timestamp
 
@@ -16,11 +17,17 @@ def retrieve_stations(
     ) -> list[Station]:
 
     requested_stations = {str(station_id) for station_id in ([station_ids] if isinstance(station_ids, str) else station_ids)}
-    requested_sensors = [sensor_codes] if isinstance(sensor_codes, str) else list(sensor_codes)
     if not requested_stations:
         raise ValueError("At least one station_id is required.")
-    if not requested_sensors:
-        raise ValueError("At least one sensor code is required.")
+
+    requested_sensors = [sensor_codes] if isinstance(sensor_codes, str) else list(sensor_codes)
+    invalid_sensors = [i for i in requested_sensors if i not in DATABASE_VARIABLES]
+    if invalid_sensors:
+        raise ValueError(f"Invalid sensors for database retrieval: {invalid_sensors}")
+
+    valid_sensors = [i for i in DATABASE_VARIABLES if i in requested_sensors]
+    if not valid_sensors:
+        raise ValueError(f"No valid sensors to retrive. Choose from: {DATABASE_VARIABLES}")
 
     start = to_utc_timestamp(start)
     end = to_utc_timestamp(end)
@@ -29,7 +36,6 @@ def retrieve_stations(
 
     data = db.get_data(
         station_ids = requested_stations,
-        variables = requested_sensors,
         start_time = start,
         end_time = end
         )
@@ -42,6 +48,7 @@ def retrieve_stations(
 
     if data['datetime'].dt.tz != target_timezone:
         data['datetime'] = data['datetime'].dt.tz_convert(target_timezone)
+    data = data[['station_id', 'datetime'] + valid_sensors].copy()
 
     all_stations = db.get_stations()
 
@@ -59,7 +66,7 @@ def retrieve_stations(
                 y = station_model.latitude,
                 elevation = station_model.elevation,
                 name = station_model.name,
-                crs = 4326,
+                crs = station_model.crs,
                 data = station_data
             )
         )

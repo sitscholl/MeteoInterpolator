@@ -98,6 +98,7 @@ def get_station_from_database(request: Request, station_id: str | None = None):
             longitude=station.longitude,
             latitude=station.latitude,
             elevation=station.elevation,
+            crs=station.crs,
             name=station.name,
         )
         for station in stations
@@ -127,6 +128,7 @@ def add_station_to_database(request: Request, station: StationCreate):
         latitude=new_station.latitude,
         longitude=new_station.longitude,
         elevation=new_station.elevation,
+        crs=station.crs,
         name=new_station.name,
     )
 

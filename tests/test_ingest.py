@@ -1,12 +1,13 @@
 import asyncio
 from datetime import UTC, datetime
-from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 import rioxarray  # noqa: F401
 import xarray as xr
+from sqlalchemy import event, select
 
+from src.database import models
 from src.database.db import InterpolationDB
 from src.domain.dem import DEM
 from src.meteo.ingest import MeteoIngestor
@@ -88,7 +89,8 @@ def _station() -> Station:
     )
 
 
-def test_get_start_date_uses_earliest_variable_and_overlap(database):
+@pytest.mark.parametrize("last_updated", [datetime(2026, 1, 10), datetime(2026, 1, 10, tzinfo=UTC)])
+def test_get_start_date_uses_latest_measurement_and_overlap(database, last_updated):
     ingestor = MeteoIngestor(
         loader=_FakeLoader(_station()),
         database=database,
@@ -96,19 +98,12 @@ def test_get_start_date_uses_earliest_variable_and_overlap(database):
         overlap_days=7,
     )
 
-    start = ingestor._get_start_date(
-        {
-            "tair_2m": SimpleNamespace(datetime=datetime(2026, 1, 10)),
-            "relative_humidity": SimpleNamespace(
-                datetime=datetime(2026, 1, 12, tzinfo=UTC)
-            ),
-        }
-    )
+    start = ingestor._get_start_date(last_updated)
 
     assert start == pd.Timestamp("2026-01-03T00:00:00Z")
 
 
-def test_get_start_date_uses_default_when_a_variable_has_no_data(database):
+def test_get_start_date_uses_default_when_station_has_no_data(database):
     default_start = datetime(2020, 1, 1, tzinfo=UTC)
     ingestor = MeteoIngestor(
         loader=_FakeLoader(_station()),
@@ -117,9 +112,7 @@ def test_get_start_date_uses_default_when_a_variable_has_no_data(database):
         default_start_date=default_start,
     )
 
-    start = ingestor._get_start_date(
-        {"tair_2m": SimpleNamespace(datetime=datetime(2026, 1, 10)), "wind": None}
-    )
+    start = ingestor._get_start_date(None)
 
     assert start == pd.Timestamp(default_start)
 
@@ -135,26 +128,25 @@ def test_upsert_station_inserts_derived_data_then_uses_overlap_watermark(databas
     first_end = datetime(2026, 1, 2, tzinfo=UTC)
 
     first = asyncio.run(
-        ingestor.upsert_station("station-a", dem, sensors=["tair_2m"], end=first_end)
+        ingestor.upsert_station("station-a", dem, end=first_end)
     )
 
     assert first.status == "completed"
-    assert first.observations_written == 3
+    assert first.observations_written == 1
     assert loader.requests[0]["start"] == pd.Timestamp("2020-01-01T00:00:00Z")
 
     second = asyncio.run(
         ingestor.upsert_station(
             "station-a",
             dem,
-            sensors=["tair_2m"],
             end=datetime(2026, 1, 3, tzinfo=UTC),
         )
     )
 
     assert second.status == "completed"
-    assert second.observations_written == 3
+    assert second.observations_written == 1
     assert loader.requests[1]["start"] == pd.Timestamp("2025-12-30T00:00:00Z")
-    assert loader.discovery_requests == []
+    assert loader.discovery_requests == ["station-a", "station-a"]
     stored = database.get_data("station-a", pd.Timestamp("2026-01-01", tz="UTC"))
     assert len(stored) == 1
     assert stored["tair_2m"].tolist() == [6.0]
@@ -181,7 +173,7 @@ def test_upsert_reuses_supplied_session_without_closing_it(database, dem):
     async def run():
         async with loader:
             result = await ingestor.upsert_station(
-                "station-a", dem, sensors=["tair_2m"], session=loader,
+                "station-a", dem, session=loader,
                 end=datetime(2026, 1, 2, tzinfo=UTC),
             )
             assert loader.active
@@ -195,17 +187,19 @@ def test_upsert_reuses_supplied_session_without_closing_it(database, dem):
 def test_empty_sensors_skip_without_fetching_or_inserting(database, dem):
     loader = _FakeLoader(_station())
     ingestor = MeteoIngestor(loader, database, MeteoResampler())
-    result = asyncio.run(ingestor.upsert_station("station-a", dem, sensors=[]))
+    loader.sensor_codes["station-a"] = set()
+    result = asyncio.run(ingestor.upsert_station("station-a", dem, persist_requested_end=True))
     assert result.status == "skipped"
     assert loader.requests == []
     assert not database.station_exists("station-a")
+    assert database.get_last_ingestion_task("station-a") is None
 
 
 def test_insufficient_coverage_preserves_existing_values(database, dem):
     loader = _FakeLoader(_station())
     ingestor = MeteoIngestor(loader, database, MeteoResampler())
-    kwargs = dict(sensors=["tair_2m"], end=datetime(2026, 1, 2, tzinfo=UTC))
-    assert asyncio.run(ingestor.upsert_station("station-a", dem, **kwargs)).observations_written == 3
+    kwargs = dict(end=datetime(2026, 1, 2, tzinfo=UTC))
+    assert asyncio.run(ingestor.upsert_station("station-a", dem, **kwargs)).observations_written == 1
     loader.station.data = loader.station.data.iloc[:2].copy()
     result = asyncio.run(ingestor.upsert_station("station-a", dem, **kwargs))
     assert result.status == "completed"
@@ -221,7 +215,7 @@ def test_invalid_frequency_fails_before_fetch_or_write(database, dem, source_fre
     loader = _FakeLoader(_station())
     loader.freq = source_freq
     result = asyncio.run(MeteoIngestor(loader, database, MeteoResampler()).upsert_station(
-        "station-a", dem, sensors=["tair_2m"]
+        "station-a", dem
     ))
     assert result.status == "failed"
     assert loader.requests == []
@@ -235,7 +229,7 @@ def test_utc_hour_boundaries_are_used_for_non_hour_offset(database, dem):
         default_start_date=pd.Timestamp("2026-01-01 06:15", tz="Asia/Kathmandu"),
     )
     result = asyncio.run(ingestor.upsert_station(
-        "station-a", dem, sensors=["tair_2m"],
+        "station-a", dem,
         end=pd.Timestamp("2026-01-02 06:15", tz="Asia/Kathmandu"),
     ))
     assert result.status == "completed"
@@ -245,15 +239,12 @@ def test_utc_hour_boundaries_are_used_for_non_hour_offset(database, dem):
 
 def test_refresh_continues_after_discovery_failure_and_reuses_session(database):
     for station_id in ["station-a", "station-b", "station-c"]:
-        database.add_station(station_id, 46, 11, 1000)
-    database.add_variable("tair_2m")
-    database.add_variable("tair_2m_min")
-    database.add_variable("tair_2m_max")
+        database.add_station(station_id, 46, 11, 1000, crs=4326)
     loader = _FakeLoader(_station())
     loader.sensor_codes = {
         "station-a": {"LT", "LF"},
         "station-b": RuntimeError("Sensor catalogue unavailable"),
-        "station-c": {"N"},
+        "station-c": set(),
     }
     result = asyncio.run(MeteoIngestor(loader, database, MeteoResampler()).refresh_database(
         end=datetime(2026, 1, 2, 0, 29, tzinfo=UTC)
@@ -261,12 +252,17 @@ def test_refresh_continues_after_discovery_failure_and_reuses_session(database):
     assert result.n_completed == 1
     assert result.n_failed == 1
     assert result.n_skipped == 1
-    assert result.written_rows == 3
+    assert result.written_rows == 1
     assert set(result.processed_stations) == {"station-a", "station-b", "station-c"}
-    assert loader.requests[0]["sensor_codes"] == ["tair_2m"]
+    assert set(loader.requests[0]["sensor_codes"]) == {"tair_2m", "relative_humidity"}
     assert len(loader.requests) == 1
     assert (loader.enters, loader.exits) == (1, 1)
-    assert all(item.requested_end == pd.Timestamp("2026-01-02", tz="UTC") for item in result.station_results)
+    for item in result.station_results:
+        if item.status == "failed":
+            # Discovery failed before the requested interval was validated.
+            assert "Sensor catalogue unavailable" in item.error
+        else:
+            assert item.requested_end == pd.Timestamp("2026-01-02", tz="UTC")
 
 
 def test_data_failure_does_not_add_station(database, dem, monkeypatch):
@@ -277,7 +273,7 @@ def test_data_failure_does_not_add_station(database, dem, monkeypatch):
 
     monkeypatch.setattr(loader, "get_data", fail)
     result = asyncio.run(MeteoIngestor(loader, database, MeteoResampler()).upsert_station(
-        "station-a", dem, sensors=["tair_2m"]
+        "station-a", dem
     ))
     assert result.status == "failed"
     assert "required request failed" in result.error
@@ -290,7 +286,7 @@ def test_missing_elevation_requires_dem(database, dem, provide_dem):
     station.elevation = None
     loader = _FakeLoader(station)
     result = asyncio.run(MeteoIngestor(loader, database, MeteoResampler()).upsert_station(
-        "station-a", dem=dem if provide_dem else None, sensors=["tair_2m"],
+        "station-a", dem=dem if provide_dem else None,
         end=datetime(2026, 1, 2, tzinfo=UTC),
     ))
     if provide_dem:
@@ -300,3 +296,91 @@ def test_missing_elevation_requires_dem(database, dem, provide_dem):
         assert result.status == "failed"
         assert "no elevation" in result.error
         assert not database.station_exists("station-a")
+
+
+def test_ingestion_requests_all_available_supported_sensors(database, dem):
+    station = _station()
+    station.data["relative_humidity"] = 75.0
+    station.data["water_level"] = 2.0
+    loader = _FakeLoader(station)
+    loader.sensor_codes[station.id] = {"LT", "LF", "W", "unknown-provider-code"}
+    result = asyncio.run(MeteoIngestor(loader, database, MeteoResampler()).upsert_station(
+        station.id, dem, end=datetime(2026, 1, 2, tzinfo=UTC)
+    ))
+    assert result.status == "completed"
+    assert result.observations_written == 1
+    assert set(loader.requests[0]["sensor_codes"]) == {"tair_2m", "relative_humidity", "water_level"}
+    row = database.get_last_row(station.id)
+    assert row.tair_2m == 6.0
+    assert row.relative_humidity == 75.0
+    assert row.water_level == 2.0
+    assert database.get_last_ingestion_task(station.id) is None
+
+
+@pytest.mark.parametrize("empty_response", [False, True])
+def test_refresh_uses_persisted_end_and_overlap_even_with_no_observations(database, dem, empty_response):
+    station = _station()
+    if empty_response:
+        station.data = None
+    loader = _FakeLoader(station)
+    ingestor = MeteoIngestor(loader, database, MeteoResampler(), overlap_days=2)
+    first_end = datetime(2026, 1, 10, tzinfo=UTC)
+    first = asyncio.run(ingestor.upsert_station(
+        station.id, dem, end=first_end, persist_requested_end=True,
+    ))
+    assert first.status == "completed"
+    assert first.observations_written == (0 if empty_response else 1)
+    assert database.get_last_ingestion_task(station.id).requested_end == datetime(2026, 1, 10)
+    second = asyncio.run(ingestor.refresh_database(
+        end=datetime(2026, 1, 11, tzinfo=UTC), persist_requested_end=True,
+    ))
+    assert second.n_completed == 1
+    assert loader.requests[1]["start"] == pd.Timestamp("2026-01-08", tz="UTC")
+    assert database.get_last_ingestion_task(station.id).requested_end == datetime(2026, 1, 11)
+
+
+def test_progress_insert_failure_rolls_back_measurement_inserts_and_updates(database, dem):
+    station = _station()
+    loader = _FakeLoader(station)
+    ingestor = MeteoIngestor(loader, database, MeteoResampler())
+    end = datetime(2026, 1, 2, tzinfo=UTC)
+    assert asyncio.run(ingestor.upsert_station(station.id, dem, end=end)).status == "completed"
+    original = station.data.copy()
+    station.data["tair_2m"] = 100.0
+    additional = original.copy()
+    additional["datetime"] += pd.Timedelta(hours=1)
+    station.data = pd.concat([station.data, additional], ignore_index=True)
+
+    def reject_progress(mapper, connection, target):
+        raise RuntimeError("forced progress failure")
+
+    event.listen(models.IngestionRequest, "before_insert", reject_progress)
+    try:
+        result = asyncio.run(ingestor.upsert_station(
+            station.id, dem, end=end, persist_requested_end=True,
+        ))
+    finally:
+        event.remove(models.IngestionRequest, "before_insert", reject_progress)
+
+    assert result.status == "failed"
+    assert result.observations_written == 0
+    assert "forced progress failure" in result.error
+    with database.Session() as session:
+        rows = session.scalars(select(models.Measurement)).all()
+        assert len(rows) == 1
+        assert rows[0].tair_2m == 6.0
+        assert session.scalars(select(models.IngestionRequest)).all() == []
+
+
+def test_explicit_start_and_metadata_update(database, dem):
+    database.add_station("station-a", 46, 11, 900, crs=4326)
+    loader = _FakeLoader(_station())
+    result = asyncio.run(MeteoIngestor(loader, database, MeteoResampler()).upsert_station(
+        "station-a", dem, start=datetime(2025, 12, 31, tzinfo=UTC),
+        end=datetime(2026, 1, 2, tzinfo=UTC), update_station_metadata=True,
+    ))
+    assert result.status == "completed"
+    assert loader.requests[0]["start"] == pd.Timestamp("2025-12-31", tz="UTC")
+    stored = database.get_stations("station-a")[0]
+    assert stored.elevation == 1000.0
+    assert stored.crs == 4326

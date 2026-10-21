@@ -12,8 +12,9 @@ from pandas.tseries.offsets import Tick
 from pyproj import CRS, Transformer
 
 from ..database.db import InterpolationDB
+from ..database.models import DATABASE_VARIABLES
 from ..domain.dem import DEM
-from ..utils import validate_station_coordinates
+from ..utils import to_utc_timestamp, validate_station_coordinates
 from .base import BaseMeteoHandler
 from .resample import MeteoResampler
 from .sensors import SENSORS
@@ -146,31 +147,15 @@ class MeteoIngestor:
         return station
 
     def _get_start_date(
-        self,
-        last_rows: dict | None,
+        self, last_updated_at: datetime | None,
     ) -> pd.Timestamp:
-        default_start = pd.Timestamp(self.default_start_date)
-        if default_start.tzinfo is None:
-            raise ValueError("default_start_date must be timezone aware")
-        default_start = default_start.tz_convert("UTC").floor(_INGESTION_FREQ)
+        default_start = to_utc_timestamp(self.default_start_date, raise_missing_timezone=True)
+        default_start = default_start.floor(_INGESTION_FREQ)
 
-        if not last_rows or any(
-            row is None or row.datetime is None
-            for row in last_rows.values()
-        ):
+        if last_updated_at is None:
             return default_start
 
-        timestamps = []
-        for row in last_rows.values():
-            timestamp = pd.Timestamp(row.datetime)
-            timestamp = (
-                timestamp.tz_localize("UTC")
-                if timestamp.tzinfo is None
-                else timestamp.tz_convert("UTC")
-            )
-            timestamps.append(timestamp)
-
-        return (min(timestamps) - pd.Timedelta(days=self.overlap_days)).floor(_INGESTION_FREQ)
+        return (to_utc_timestamp(last_updated_at) - pd.Timedelta(days=self.overlap_days)).floor(_INGESTION_FREQ)
 
     async def _get_variables_for_station(
         self,
@@ -187,14 +172,10 @@ class MeteoIngestor:
         dem: DEM | None = None,
         start: datetime | None = None,
         end: datetime | None = None,
-        sensors: list[str] | None = None,
         update_station_metadata: bool = False,
-        add_missing_variables: bool = True,
         session: BaseMeteoHandler | None = None,
         persist_requested_end: bool = False,
     ) -> StationIngestResult:
-        if sensors is not None and isinstance(sensors, str):
-            sensors = [sensors]
 
         requested_start = None
         requested_end = None
@@ -209,17 +190,18 @@ class MeteoIngestor:
                 source_freq = meteo_loader.freq
                 self._validate_frequency(source_freq, _INGESTION_FREQ)
 
-                if sensors is None:
-                    sensors = sorted(
-                        await self._get_variables_for_station(
-                            station_id, session=meteo_loader
+                station_sensors = sorted(
+                    await self._get_variables_for_station(
+                        station_id, session=meteo_loader
                         )
                     )
+                valid_sensors = [i for i in DATABASE_VARIABLES if i in station_sensors]
 
                 requested_start = self._validate_start(start)
                 requested_end = self._validate_end(end)
 
-                if not sensors:
+                if not valid_sensors:
+                    logger.warning(f"No valid sensors for station {station_id}. Skipping database upsert.")
                     return StationIngestResult(
                         station_id=station_id,
                         status="skipped",
@@ -228,10 +210,8 @@ class MeteoIngestor:
                     )
 
                 if requested_start is None:
-                    last_rows = self.database.get_last_row_per_variable(
-                        station_id, sensors
-                    )
-                    requested_start = self._get_start_date(last_rows)
+                    last_row = self.database.get_last_row(station_id)
+                    requested_start = self._get_start_date(last_row.datetime if last_row else None)
 
                 if requested_end <= requested_start:
                     raise ValueError(
@@ -241,7 +221,7 @@ class MeteoIngestor:
 
                 station = await meteo_loader.get_data(
                     station_id=station_id,
-                    sensor_codes=sensors,
+                    sensor_codes=valid_sensors,
                     start=requested_start,
                     end=requested_end,
                     target_timezone=ZoneInfo("UTC"),
@@ -256,11 +236,11 @@ class MeteoIngestor:
 
             if not self.database.station_exists(station_id):
                 self.database.add_station(
-                    id = station.id, latitude = station.y, longitude = station.x, elevation = station.elevation, name = station.name
+                    id = station.id, latitude = station.y, longitude = station.x, elevation = station.elevation, crs = station.crs, name = station.name
                 )
             elif update_station_metadata:
                 self.database.update_station(
-                    id = station.id, latitude = station.y, longitude = station.x, elevation = station.elevation, name = station.name, only_missing = False
+                    id = station.id, latitude = station.y, longitude = station.x, elevation = station.elevation, crs = station.crs, name = station.name, only_missing = False
                 )
 
             if station.data is None:
@@ -282,18 +262,11 @@ class MeteoIngestor:
             station = self.resampler.resample_station(
                 station, freq = _INGESTION_FREQ, datetime_col = 'datetime', source_freq = source_freq,
                 )
-
-            station_variables = [i for i in station.data.columns if i not in ['datetime', 'station_id']]
-            variables_not_in_db = [i for i in station_variables if not self.database.variable_exists(i)]
-
-            if len(variables_not_in_db) > 0 and add_missing_variables:
-                for var in variables_not_in_db:
-                    self.database.add_variable(name = var)
             
             with self.database.Session.begin() as db_session:
                 
                 written_rows = self.database.add_station_data(
-                    id = station.id, data = station.data, ignore_missing_variables = True, db_session=db_session
+                    id = station.id, data = station.data, drop_invalid_variables=True, db_session=db_session
                     )
                 if persist_requested_end:
                     self.database.log_ingestion_task(
@@ -328,26 +301,21 @@ class MeteoIngestor:
         self,
         end: datetime | None = None,
         update_station_metadata: bool = False,
-        add_missing_variables: bool = False,
         persist_requested_end: bool = False,
     ):
         ##Query station_ids and sensor_codes from database and refresh them all
         requested_end = self._validate_end(end)     
         database_stations = self.database.get_stations()
-        database_variables = {var.name for var in self.database.get_variables()}
         
         results = []
         async with self.loader as meteo_loader:
             for station in database_stations:
                 try:
-                    station_variables = await self._get_variables_for_station(station.id, session = meteo_loader)
-                    requested_variables = sorted(station_variables & database_variables) #drops derived variables, such as tair_2m_max...
                 
                     last_refresh_task = self.database.get_last_ingestion_task(station.id)
                     if last_refresh_task is not None:
-                        last_refresh_end = pd.Timestamp(last_refresh_task.requested_end) - pd.Timedelta(days=self.overlap_days)
-                        if last_refresh_end.tz is None:
-                            last_refresh_end = last_refresh_end.tz_localize('UTC')
+                        last_refresh_end = to_utc_timestamp(last_refresh_task.requested_end)
+                        last_refresh_end = last_refresh_end - pd.Timedelta(days=self.overlap_days)
                     else:
                         last_refresh_end = None
 
@@ -366,9 +334,7 @@ class MeteoIngestor:
                         station.id, 
                         start = last_refresh_end,
                         end = requested_end, 
-                        sensors = requested_variables, 
                         update_station_metadata=update_station_metadata, 
-                        add_missing_variables=add_missing_variables,
                         session = meteo_loader,
                         persist_requested_end=persist_requested_end
                     )

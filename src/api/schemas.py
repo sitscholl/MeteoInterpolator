@@ -38,6 +38,7 @@ class StationRead(BaseModel):
     longitude: float
     latitude: float
     elevation: float
+    crs: int
     name: str | None = None
 
 class StationCreate(StationRead):

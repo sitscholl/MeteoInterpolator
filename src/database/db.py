@@ -3,22 +3,29 @@ from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
 
 import pandas as pd
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, func
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session, sessionmaker
 
-from ..utils import to_utc_timestamp, validate_station_coordinates
+from ..utils import to_utc_timestamp, validate_station_coordinates, validate_crs
 from . import models
+from .models import DATABASE_VARIABLES
 
 logger = logging.getLogger(__name__)
 
 _INSERT_STATEMENT = sqlite_insert(models.Measurement)
 _UPSERT_STATEMENT = _INSERT_STATEMENT.on_conflict_do_update(
-    index_elements=["station_id", "variable_id", "datetime"],
-    set_={
-        "value": _INSERT_STATEMENT.excluded.value,
-        "retrieved_at": _INSERT_STATEMENT.excluded.retrieved_at,
+    index_elements=["station_id", "datetime"],
+    set_= {
+    **{
+        name: func.coalesce(
+            _INSERT_STATEMENT.excluded[name],
+            models.Measurement.__table__.c[name],
+        )
+        for name in DATABASE_VARIABLES
     },
+    "retrieved_at": _INSERT_STATEMENT.excluded.retrieved_at,
+    }
 )
 _BATCH_SIZE = 5_000
 
@@ -59,19 +66,11 @@ class InterpolationDB:
                 query = query.filter(models.Station.id == id)
             return query.all()
 
-    def get_variables(self, name: str | None = None):
-        with self.session_scope() as session:
-            query = session.query(models.Variable)
-            if name is not None:
-                query = query.filter(models.Variable.name == name)
-            return query.all()
-
     def get_data(
             self,
             station_ids: str | list[str],
             start_time: datetime,
             end_time: datetime | None = None,
-            variables: list[str] | None = None,
         ):
 
         if isinstance(station_ids, str):
@@ -79,31 +78,17 @@ class InterpolationDB:
 
         with self.session_scope() as session:
             query = (
-                session.query(
-                    models.Measurement.datetime.label("datetime"),
-                    models.Measurement.value.label("value"),
-                    models.Station.id.label("station_id"),
-                    models.Variable.name.label("variable"),
-                )
+                session.query(models.Measurement)
                 .join(models.Station, models.Measurement.station_id == models.Station.id)
-                .join(models.Variable, models.Measurement.variable_id == models.Variable.id)
                 .filter(
                     models.Station.id.in_(station_ids),
                 )
             )
 
-            start_time = pd.Timestamp(start_time)
-            orig_timezone = start_time.tzinfo
-            if orig_timezone is None:
-                raise ValueError("Start time has not timezone. Use timezone-aware datetimes to get data from the database")
-            start_time_utc = start_time.astimezone(UTC)
+            start_time_utc = to_utc_timestamp(start_time, raise_missing_timezone=True)
             if end_time is not None:
-                end_time = pd.Timestamp(end_time)
-                end_timezone = end_time.tzinfo
-                if orig_timezone != end_timezone:
-                    raise ValueError(f"Start and end timezone must be the same. Got {orig_timezone} vs {end_timezone}")
-                 
-                end_time_utc = end_time.astimezone(UTC)
+                end_time_utc = to_utc_timestamp(end_time, raise_missing_timezone=True)
+
                 query = query.filter(
                     models.Measurement.datetime >= start_time_utc,
                     models.Measurement.datetime < end_time_utc,
@@ -111,49 +96,24 @@ class InterpolationDB:
             else:
                 query = query.filter(models.Measurement.datetime >= start_time_utc)
 
-            if variables is not None:
-                available_variables = self.get_variables()
-                variables_ids = []
-                for v in variables:
-                    variable_model = [i for i in available_variables if i.name == v]
-                    if not variable_model:
-                        logger.warning(f"Variable {v} not found in database")
-                        continue
-                    variables_ids.append(variable_model[0].id)
-
-                query = query.filter(
-                    models.Measurement.variable_id.in_(variables_ids)
-                )
-
             df = pd.read_sql_query(sql=query.statement, con=self.engine)
 
         if not df.empty:
-            df["datetime"] = pd.to_datetime(df["datetime"], utc=True).dt.tz_convert(orig_timezone)
-            df = df.pivot(columns = 'variable', values = 'value', index = ['station_id', 'datetime'])
-            df.reset_index(inplace = True)
+            df["datetime"] = pd.to_datetime(df["datetime"], utc=True).dt.tz_convert(start_time.tzinfo)
 
         return df
 
-    def get_last_row_per_variable(self, station_id: str, variables: list[str]) -> dict | None:
+    def get_last_row(self, station_id: str) -> models.Measurement | None:
         if not self.station_exists(station_id):
             return None
-        
-        if isinstance(variables, str):
-            variables = [variables]
-
-        var_results = {}
         with self.session_scope() as session:
-            for var in variables:
-                query = (
-                    session.query(models.Measurement)
-                    .join(models.Station, models.Measurement.station_id == models.Station.id)
-                    .join(models.Variable, models.Measurement.variable_id == models.Variable.id)
-                    .filter(models.Station.id == station_id)
-                    .filter(models.Variable.name == var)
-                    .order_by(models.Measurement.datetime.desc())
-                    )
-                var_results[var] = query.first()
-        return var_results
+            query = (
+                session.query(models.Measurement)
+                .join(models.Station, models.Measurement.station_id == models.Station.id)
+                .filter(models.Station.id == station_id)
+                .order_by(models.Measurement.datetime.desc())
+                )
+            return query.first()
 
     def station_exists(self, id: str):
         existing_station = self.get_stations(id = id)
@@ -165,6 +125,7 @@ class InterpolationDB:
         latitude: float, 
         longitude: float, 
         elevation: float, 
+        crs: int,
         name: str | None = None, 
         ):
         if self.station_exists(id):
@@ -177,10 +138,13 @@ class InterpolationDB:
             longitude,
             elevation,
         )
+        crs = validate_crs(crs)
 
         session = self.Session()
         try:
-            new_station = models.Station(id = id, latitude = latitude, longitude = longitude, elevation = elevation, name = name)
+            new_station = models.Station(
+                id = id, latitude = latitude, longitude = longitude, elevation = elevation, crs = crs, name = name
+                )
             session.add(new_station)
             session.commit()
             logger.info("New station with id %s inserted successfully.", id)
@@ -207,7 +171,7 @@ class InterpolationDB:
                 raise ValueError(f"No station with id {id} for exists.")
             station = stations[0]
 
-            allowed_fields = {"name", "latitude", "longitude", "elevation"}
+            allowed_fields = {"name", "latitude", "longitude", "elevation", "crs"}
             invalid_fields = {k: v for k, v in kwargs.items() if k not in allowed_fields}
             if len(invalid_fields) > 0:
                 raise ValueError(f"Invalid fields in update_station: {invalid_fields.keys()}. Allowed fields: {allowed_fields}")
@@ -219,11 +183,14 @@ class InterpolationDB:
                         continue
                     if only_missing and getattr(station, key) is not None:
                         continue
+                    if key == 'crs':
+                        value = validate_crs(value)
                     setattr(station, key, value)
                     changed = True
 
                 if changed:
                     _ = validate_station_coordinates(station.latitude, station.longitude, station.elevation)
+                    _ = validate_crs(station.crs)
                     session.commit()
                     logger.info("Updated station metadata for station %s.", id)
                     session.refresh(station)
@@ -234,34 +201,13 @@ class InterpolationDB:
                 raise
 
     def variable_exists(self, name: str):
-        existing_variable = self.get_variables(name = name)
-        return len(existing_variable) > 0
-
-    def add_variable(self, name: str, unit: str | None = None, description: str | None = None):
-
-        if self.variable_exists(name):
-            raise ValueError(f"Variable {name} already exists in the database")
-
-        session = self.Session()
-        try:
-            new_variable = models.Variable(name = name, unit = unit, description = description)
-            session.add(new_variable)
-            session.commit()
-            logger.info(f"New variable {new_variable.name} inserted successfully.")
-            session.refresh(new_variable)
-            return new_variable
-        except Exception as e: 
-            session.rollback()
-            logger.error(f"Error inserting new variable: {e}")
-            raise
-        finally:
-            session.close()
+        return name in DATABASE_VARIABLES
 
     def add_station_data(
         self, 
         id: str,
         data: pd.DataFrame, 
-        ignore_missing_variables: bool = False,
+        drop_invalid_variables: bool = False,
         db_session: Session | None = None
         ):
 
@@ -297,40 +243,28 @@ class InterpolationDB:
         if len(variable_columns) == 0:
             raise ValueError('No variable columns found in data')
 
-        variables_by_name = {
-            variable.name: variable.id
-            for variable in self.get_variables()
-        }
-
-        missing_variables = [name for name in variable_columns if name not in variables_by_name]
-        if len(missing_variables) > 0 and ignore_missing_variables:
-            logger.warning("Ignoring missing variables when adding station data: %s", missing_variables)
-        elif len(missing_variables) > 0:
-            raise ValueError(f"Cannot add station data to database because the following variables are missing: {missing_variables}. Avaiable variabels: {variables_by_name.keys()}")
-
-        active_variables = [i for i in variable_columns if i not in missing_variables]
+        invalid_variables = [i for i in variable_columns if i not in DATABASE_VARIABLES]
+        if invalid_variables and not drop_invalid_variables:
+            raise ValueError(f"Cannot add station data to database due to the following invalid variables: {invalid_variables}")
+        elif invalid_variables:
+            logger.debug("Dropping invalid variables before adding data: %s", invalid_variables)
+            data.drop(columns = invalid_variables, inplace = True)
+        
+        active_variables = [i for i in DATABASE_VARIABLES if i in variable_columns]
         if len(active_variables) == 0:
-            raise ValueError("No variables available to insert into the database")
+            raise ValueError("No valid variables available to insert into the database")
         
         # Create table for database insertion
         measurements = data[['datetime'] + active_variables].copy()
         measurements['retrieved_at'] = pd.Timestamp.now(tz = "UTC")
-        measurements = measurements.melt(
-            id_vars=['datetime', 'retrieved_at'],
-            value_vars=active_variables,
-            var_name='variable',
-            value_name='value'
-        )
-        measurements.dropna(subset=['value'], inplace = True)
+        measurements.dropna(subset=active_variables, how = 'all', inplace = True)
 
         measurements['station_id'] = id
-        measurements['variable_id'] = measurements['variable'].map(variables_by_name)
-        measurements.drop(columns = ['variable'], inplace = True)
 
         # Ensure column order matches the measurements table definition
-        measurements = measurements[['station_id', 'variable_id', 'datetime', 'value', 'retrieved_at']]
+        measurements = measurements[['station_id', 'datetime'] + active_variables + ['retrieved_at']]
         measurements = measurements.drop_duplicates(
-            subset=["station_id", "variable_id", "datetime"],
+            subset=["station_id", "datetime"],
             keep="last",
         )
 
