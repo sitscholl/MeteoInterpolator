@@ -9,7 +9,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import sessionmaker
 
 from . import models
-from ..utils import validate_station_coordinates
+from ..utils import validate_station_coordinates, to_utc_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -344,13 +344,55 @@ class InterpolationDB:
                         batch.to_dict(orient="records"),
                     )
                     written_rows += len(batch)
-            logger.debug("Inserted %s measurements for station %s and %s variables.", len(measurements), id, len(active_variables))
+            logger.debug("Upserted %s measurements for station %s and %s variables.", len(measurements), id, len(active_variables))
         except Exception as e:
-            logger.exception("Error inserting bulk measurement data for station %s", id)
+            logger.exception("Error upserting bulk measurement data for station %s", id)
             raise
 
         return written_rows
-                    
+
+    def log_ingestion_task(
+        self, station_id: str, requested_start: datetime, requested_end: datetime, status: str
+    ):
+        stations = self.get_stations(station_id)
+        if not stations:
+            raise ValueError(f"No station with id {station_id} in database")
+        else:
+            station = stations[0]
+
+        if status not in ['completed', 'skipped', 'failed']:
+            raise ValueError(f"Invalid status {status}")
+
+        requested_start = to_utc_timestamp(requested_start)
+        requested_end = to_utc_timestamp(requested_end)
+
+        session = self.Session()
+        try:
+            new_entry = models.IngestionRequest(
+                station_id = station.id, requested_start = requested_start, requested_end = requested_end, status = status)
+            session.add(new_entry)
+            session.commit()
+            logger.info("New ingestion request for station %s inserted successfully.", station.id)
+            session.refresh(new_entry)
+            return new_entry
+        except Exception as e: 
+            session.rollback()
+            logger.exception("Error inserting ingestion request for station %s", station.id)
+            raise
+        finally:
+            session.close()
+   
+    def get_last_ingestion_task(self, station_id: str, status: str = 'completed'):
+        with self.session_scope() as session:
+            query = (
+                session.query(models.IngestionRequest)                
+                .join(models.Station, models.IngestionRequest.station_id == models.Station.id)
+                .filter(models.Station.id == station_id)
+                .filter(models.IngestionRequest.status == status)
+                .order_by(models.IngestionRequest.requested_end.desc())
+                )
+            return query.first()
+
     def close(self):
         """
         Close the SQLAlchemy session and dispose of the engine connection pool.
