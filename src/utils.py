@@ -138,3 +138,15 @@ def validate_station_coordinates(
         numeric_values["longitude"],
         numeric_values["elevation"],
     )
+
+def to_utc_timestamp(input: datetime.datetime | pd.Timestamp | str, raise_missing_timezone: bool = False):
+    
+    ts = pd.Timestamp(input)
+    if ts.tz is None:
+        if raise_missing_timezone:
+            raise ValueError("Missing timezone in input date")
+        ts = ts.tz_localize('UTC')
+    else:
+        ts = ts.tz_convert('UTC')
+
+    return ts
