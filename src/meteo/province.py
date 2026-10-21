@@ -32,7 +32,7 @@ class ProvinceAPI(BaseMeteoHandler):
 
     provider_name = 'province_api'
 
-    base_url = "http://daten.buergernetz.bz.it/services/meteo/v1"
+    base_url = "https://geoservices.buergernetz.bz.it/services/meteo/v1"
     sensors_url = base_url + "/sensors"
     stations_url = base_url + "/stations"
     timeseries_url = base_url + "/timeseries"
