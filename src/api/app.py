@@ -9,6 +9,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
+from pandas import Timedelta
 
 from ..coordinator import InterpolationCoordinator
 from ..database.db import StationAlreadyExistsError
@@ -28,6 +29,13 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # Load environment variables from .env file
     load_dotenv()
+
+    logging.basicConfig(
+        level=os.getenv("LOG_LEVEL", "INFO").upper(),
+        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+    )
+
+    logger.info("Starting application")
 
     config_path = os.getenv('CONFIG_FILE')
     if config_path is None:
@@ -154,13 +162,13 @@ def add_station_to_database(request: Request, station: StationCreate):
         name=new_station.name,
     )
 
-@app.post("/api/refresh", response_model=DatabaseRefreshSubmission, status_code=status.HTTP_202_ACCEPTED)
+@app.post("/api/refresh_database", response_model=DatabaseRefreshSubmission, status_code=status.HTTP_202_ACCEPTED)
 async def submit_database_refresh(request: Request):
 
     now_dt = datetime.datetime.now(datetime.UTC)
     request.app.state.scheduler.modify_job(
         "database_refresh",
-        next_run_time=now_dt,
+        next_run_time=datetime.datetime.now(datetime.UTC) + Timedelta(seconds = 3),
     )
 
     return DatabaseRefreshSubmission(
