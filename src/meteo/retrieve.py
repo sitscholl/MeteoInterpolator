@@ -3,16 +3,8 @@ from pandas import Timestamp
 
 from ..database.db import InterpolationDB
 from .types import Station
+from ..utils import to_utc_timestamp
 
-def _to_utc_timestamp(dt: datetime):
-    
-    ts = Timestamp(dt)
-    if ts.tz is None:
-        ts = ts.tz_localize('UTC')
-    else:
-        ts = ts.tz_convert('UTC')
-
-    return ts
 
 def retrieve_stations(
     db: InterpolationDB,
@@ -30,8 +22,8 @@ def retrieve_stations(
     if not requested_sensors:
         raise ValueError("At least one sensor code is required.")
 
-    start = _to_utc_timestamp(start)
-    end = _to_utc_timestamp(end)
+    start = to_utc_timestamp(start)
+    end = to_utc_timestamp(end)
     if start >= end:
         raise ValueError(f"Start must be smaller than end. Got {start} vs {end}")
 
