@@ -276,6 +276,7 @@ class MeteoIngestor:
                         status = "completed",
                         db_session=db_session
                     )
+                logger.debug("Upserted %s rows to database for station %s", written_rows, station.id)
 
             return StationIngestResult(
                 station_id = station.id,
@@ -343,7 +344,7 @@ class MeteoIngestor:
 
         refresh_result = DatabaseRefreshResult(results)
         logger.info(
-            "Database refresh completed. Processed %s stations (skipped=%s, failed=%s) and wrote %s total rows to database", 
+            "Database refresh completed. Processed %s stations (skipped=%s, failed=%s) and wrote %s total rows to the database", 
             len(refresh_result.processed_stations), 
             refresh_result.n_skipped, 
             refresh_result.n_failed, 
