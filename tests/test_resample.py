@@ -8,9 +8,9 @@ from src.meteo.types import Station
 
 
 def test_min_samples_for_coverage_uses_source_and_target_frequency():
-    resampler = MeteoResampler(target_freq="D", min_coverage=0.4)
+    resampler = MeteoResampler(min_coverage=0.4)
 
-    assert resampler.min_samples_for_coverage("10min") == 58
+    assert resampler.min_samples_for_coverage("10min", target_freq="D") == 58
 
 
 def test_resample_meteo_data_skips_when_source_matches_target_frequency():
@@ -27,10 +27,11 @@ def test_resample_meteo_data_skips_when_source_matches_target_frequency():
         }
     )
     meteo_data = MeteoData(stations=stations, observations=observations)
-    resampler = MeteoResampler(target_freq="D", min_coverage=1.0)
+    resampler = MeteoResampler(min_coverage=1.0)
 
     result = resampler.resample_meteo_data(
         meteo_data,
+        target_freq="D",
         source_freq="D",
         datetime_col="datetime",
         groupby_cols=["station_id"],
@@ -40,7 +41,7 @@ def test_resample_meteo_data_skips_when_source_matches_target_frequency():
 
 
 def test_resampling_masks_values_below_min_coverage():
-    resampler = MeteoResampler(target_freq="D", min_coverage=0.5)
+    resampler = MeteoResampler(min_coverage=0.5)
     data = pd.DataFrame(
         {
             "station_id": ["a", "a"],
@@ -56,7 +57,7 @@ def test_resampling_masks_values_below_min_coverage():
         freq="D",
         datetime_col="datetime",
         groupby_cols=["station_id"],
-        min_sample_size=resampler.min_samples_for_coverage("10min"),
+        min_sample_size=resampler.min_samples_for_coverage("10min", target_freq='D'),
     )
 
     assert pd.isna(result.loc[0, "tair_2m"])
@@ -84,7 +85,7 @@ def test_resample_station_groups_by_station_id_and_preserves_metadata():
 
     result = resampler.resample_station(
         station,
-        freq="h",
+        target_freq="h",
         source_freq="10min",
         min_sample_size=1,
     )
@@ -104,4 +105,4 @@ def test_resample_station_leaves_missing_data_unchanged():
         elevation=1000.0,
     )
 
-    assert MeteoResampler().resample_station(station, freq="h") is station
+    assert MeteoResampler().resample_station(station, target_freq="h") is station

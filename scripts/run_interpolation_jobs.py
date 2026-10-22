@@ -20,7 +20,7 @@ if __name__ == '__main__':
         start = "2021-12-01"
         end = "2021-12-02"
 
-        request = InterpolationRequest('tair_2m', start, end)
+        request = InterpolationRequest(param='tair_2m', start=start, end=end, freq='D')
 
         await coordinator.run(request)
 

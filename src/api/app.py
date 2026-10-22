@@ -17,6 +17,7 @@ from ..jobs.database_refresh import run_database_refresh
 from ..runtime import RuntimeContext
 from .schemas import (
     DatabaseRefreshSubmission,
+    InterpolationFrequency,
     InterpolationRequest,
     InterpolationSubmission,
     StationCreate,
@@ -181,11 +182,12 @@ async def interpolate(
     param: str,
     start: str,
     end: str,
+    freq: InterpolationFrequency = 'D',
     timezone: str = "Europe/Rome",
 ):
     coordinator = request.app.state.coordinator
 
-    interpolation_request = InterpolationRequest(param=param, start=start, end=end, timezone=timezone)
+    interpolation_request = InterpolationRequest(param=param, start=start, end=end, timezone=timezone, freq=freq)
     logger.info("Submitting request %s", request)
     
     return await coordinator.submit(interpolation_request)

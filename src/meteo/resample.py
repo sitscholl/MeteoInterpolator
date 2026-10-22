@@ -56,7 +56,6 @@ class MeteoResampler:
         self,
         resample_colmap: dict[str, str | Callable | list[str | Callable] | tuple[str | Callable, ...]] | None = None,
         default_aggfunc: str | Callable = 'mean',
-        target_freq: str = "D",
         min_coverage: float = 0.4,
     ):
 
@@ -64,7 +63,6 @@ class MeteoResampler:
             resample_colmap.copy() if resample_colmap is not None else DEFAULT_RESAMPLE_COLMAP.copy()
         )
         self.default_aggfunc = default_aggfunc
-        self.target_freq = target_freq
         self.min_coverage = min_coverage
 
         if not 0 < self.min_coverage <= 1:
@@ -78,8 +76,7 @@ class MeteoResampler:
     def frequencies_equal(cls, left: str, right: str) -> bool:
         return cls._to_offset(left) == cls._to_offset(right)
 
-    def min_samples_for_coverage(self, source_freq: str, target_freq: str | None = None) -> int:
-        target_freq = target_freq or self.target_freq
+    def min_samples_for_coverage(self, source_freq: str, target_freq: str) -> int:
         source_offset = self._to_offset(source_freq)
         target_offset = self._to_offset(target_freq)
 
@@ -212,7 +209,7 @@ class MeteoResampler:
     def resample_station(
         self,
         station: Station,
-        freq: str | None = None,
+        target_freq: str,
         datetime_col: str = "datetime",
         groupby_cols: list[str] | None = None,
         min_sample_size: int | None = None,
@@ -224,7 +221,6 @@ class MeteoResampler:
         if station.data is None or station.data.empty:
             return station
 
-        target_freq = freq or self.target_freq
         if source_freq is not None and self.frequencies_equal(source_freq, target_freq):
             logger.info("Skipping station resampling because source frequency %s already matches target frequency %s", source_freq, target_freq)
             return station
@@ -263,7 +259,7 @@ class MeteoResampler:
     def resample_meteo_data(
         self,
         meteo_data: MeteoData,
-        freq: str | None = None,
+        target_freq: str,
         datetime_col: str = "datetime",
         groupby_cols: list[str] | None = None,
         min_sample_size: int | None = None,
@@ -276,7 +272,6 @@ class MeteoResampler:
         if meteo_data.n_stations == 0:
             return meteo_data
 
-        target_freq = freq or self.target_freq
         if source_freq is not None and self.frequencies_equal(source_freq, target_freq):
             logger.info("Skipping meteo resampling because source frequency %s already matches target frequency %s", source_freq, target_freq)
             return meteo_data

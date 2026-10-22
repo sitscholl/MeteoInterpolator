@@ -65,7 +65,6 @@ class IngestorConfig(ConfigModel):
 
 class ResamplerConfig(ConfigModel):
     min_coverage: float = Field(gt=0, le=1, default = .7)
-    target_freq: str
 
 class DatabaseConfig(ConfigModel):
     engine: str = Field("sqlite:///db/database.db")

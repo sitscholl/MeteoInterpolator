@@ -260,7 +260,7 @@ class MeteoIngestor:
 
             ##Resample to 1h resolution to reduce database size
             station = self.resampler.resample_station(
-                station, freq = _INGESTION_FREQ, datetime_col = 'datetime', source_freq = source_freq,
+                station, target_freq = _INGESTION_FREQ, datetime_col = 'datetime', source_freq = source_freq,
                 )
             
             with self.database.Session.begin() as db_session:

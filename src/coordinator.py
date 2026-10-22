@@ -78,6 +78,10 @@ class InterpolationCoordinator:
         self._tasks: dict[str, asyncio.Task] = {}
 
     async def _prepare_request(self, request: InterpolationRequest) -> PreparedInterpolationRun:
+
+        if request.freq not in ['D', 'h']:
+            raise ValueError(f"freq must be one of 'D' or 'h'. Got {request.freq}")
+
         self._validate_dates(request.start, request.end)
         prediction_target = self._prepare_target_points(request.target_points)
         target_crs = (
@@ -105,10 +109,10 @@ class InterpolationCoordinator:
         if self.context.gapfiller is not None:
             meteo_data = self.context.gapfiller.fill_gaps(meteo_data)
 
-        target_freq = self.context.resampler.target_freq
+        target_freq = request.freq
         meteo_data = self.context.resampler.resample_meteo_data(
             meteo_data,
-            freq=target_freq,
+            target_freq=target_freq,
             source_freq=_INGESTION_FREQ,
             datetime_col="datetime",
             groupby_cols=["station_id"],

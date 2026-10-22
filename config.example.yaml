@@ -16,7 +16,6 @@ meteo_data:
     overlap_days: 3
 
   resampling:
-    target_freq: D
     min_coverage: 0.7
     
   database:
@@ -66,5 +65,5 @@ output:
     root: data/results
     # filename_pattern supports {var}, {variable}, {date}, {param}, and {suffix}
     filename_pattern: "{date}_{var}"
-    # date_format defaults from resampling.target_freq, e.g. "%Y-%m-%d" for daily output.
+    # date_format defaults from request frequency, e.g. "%Y-%m-%d" for daily output.
     # date_format: "%Y%m%d"

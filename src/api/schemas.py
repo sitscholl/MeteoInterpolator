@@ -8,6 +8,7 @@ from pydantic import AfterValidator, BaseModel, BeforeValidator, model_validator
 from ..utils import localize_datetime_string
 
 RunStatus = Literal["queued", "running", "completed", "failed"]
+InterpolationFrequency = Literal["h", "D"]
 
 
 def parse_datetime(value) -> datetime:
@@ -52,6 +53,7 @@ class InterpolationRequest(BaseModel):
     start: Annotated[datetime, BeforeValidator(parse_datetime)]
     end: Annotated[datetime, BeforeValidator(parse_datetime)]
     timezone: Annotated[str, AfterValidator(validate_timezone)] = 'Europe/Rome'
+    freq: InterpolationFrequency = 'D'
     target_points: list[tuple[float, float]] | None = None ##TODO: Decide final datatype for target_points support
 
     @model_validator(mode='after')

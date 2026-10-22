@@ -27,7 +27,7 @@ def script_environment(monkeypatch, tmp_path):
             },
             "database": {"engine": "sqlite:///configured.db"},
             "scheduler": {"hour": 3},
-            "resampling": {"target_freq": "h", "min_coverage": 0.6},
+            "resampling": { "min_coverage": 0.6},
             "database_ingestion": {
                 "overlap_days": 5,
             },
@@ -80,7 +80,6 @@ def test_scripts_use_nested_config_and_explicit_path_overrides(script_environmen
     # Applying CLI overrides must not mutate the source configuration.
     assert env.config["meteo_data"]["loader"]["observations_path"] == "configured/*.csv"
     options = env.ingestor_factory.call_args.kwargs
-    assert options["resampler"].target_freq == "h"
     assert options["resampler"].min_coverage == 0.6
     assert options["overlap_days"] == 5
     assert options["default_start_date"] == datetime(2000, 1, 1, tzinfo=UTC)
