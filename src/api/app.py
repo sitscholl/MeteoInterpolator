@@ -59,7 +59,7 @@ async def lifespan(app: FastAPI):
             id='database_refresh',
             max_instances=1,
             coalesce=True,
-            **runtime.meteo_data_config.scheduler_config
+            **runtime.meteo_data_config.scheduler_options
         )
         scheduler.start()
 

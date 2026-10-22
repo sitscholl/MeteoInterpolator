@@ -12,7 +12,7 @@ def run_database_refresh(config: MeteoDataConfig):
 
 async def _refresh_on_worker(config: MeteoDataConfig):
     """
-    Create new instances of loader, handler and ingestor and pass them to workers
+    Create new instances of loader, handler and run refresh on separate worker
     """
     db_handler = config.create_database_handler()
     try:
@@ -23,7 +23,7 @@ async def _refresh_on_worker(config: MeteoDataConfig):
             loader = meteo_loader,
             database = db_handler,
             resampler = resampler,
-            **config.ingestor_config
+            **config.ingestor_options
         )
 
         refresh_result = await ingestor.refresh_database(persist_requested_end=True)

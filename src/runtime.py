@@ -128,7 +128,7 @@ class RuntimeContext:
         try:
 
             ## Meteo Config
-            self.meteo_data_config = MeteoDataConfig.from_config(config['meteo_data'])
+            self.meteo_data_config = MeteoDataConfig.model_validate(config['meteo_data'])
 
             ## Cache
             cache_config = config.get("cache", {})

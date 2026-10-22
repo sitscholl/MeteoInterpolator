@@ -1,7 +1,7 @@
 import glob
 import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -164,7 +164,7 @@ class LocalFileMeteoHandler(BaseMeteoHandler):
             logger.debug("Dropped %s local observation row(s) with only missing sensor values", n_dropped)
         return data
 
-    async def get_station_info(self, station_id: str | None = None) -> Dict[str, Any]:
+    async def get_station_info(self, station_id: str | None = None) -> dict[str, Any]:
         if self._station_info is None:
             metadata = pd.read_csv(self.station_metadata_path)
             if "station_id" not in metadata.columns:

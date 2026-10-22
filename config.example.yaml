@@ -1,13 +1,13 @@
 meteo_data:
   loader:
-    # handler: province_api
+    handler: province_api
     # stations: ['02500MS', '09700MS', '15800MS', '19300MS', '23200MS', '25900MS', '34500MS', '37100MS', '39100MS',
     #             '41000MS', '44500MS', '50500MS', '56900MS', '59700MS', '65600MS', '66500MS', '73500MS',
     #             '74900MS', '75600MS', '82200MS', '83200MS', '85120MS', '86900MS', '88820MS']
-    handler: local_file
-    station_metadata_path: data/province/stations.csv
-    observations_path: data/province/station_files/*.csv
-    timezone: UTC # Europe/Rome
+    # handler: local_file
+    # station_metadata_path: data/province/stations.csv
+    # observations_path: data/province/station_files/*.csv
+    # timezone: UTC # Europe/Rome
   
   scheduler:
     hour: 3
@@ -41,18 +41,18 @@ interpolation:
     fit_initial_params: True
     initial_params_elev_threshold: 1500
 
-  distance:
-    type: path_distance
-    connectivity_type: 4
-    lam_values: [0, 25, 50, 75, 100, 125, 150, 175, 200]
-    max_visibility_distance: 10000
+  # distance:
+  #   type: path_distance
+  #   connectivity_type: 4
+  #   lam_values: [0, 25, 50, 75, 100, 125, 150, 175, 200]
+  #   max_visibility_distance: 10000
 
-  inverse_distance_weighting:
-    neighbours: 4
-    weight_exponent: 2
+  # inverse_distance_weighting:
+  #   neighbours: 4
+  #   weight_exponent: 2
 
 cross_validation:
-  enabled: true
+  enabled: false
   n_splits: 10
   min_relative_score_improvement: 0.05
   improvement_latency_steps: 3
