@@ -8,6 +8,7 @@ import pandas as pd
 
 from .base import BaseMeteoHandler
 from .sensors import SENSORS
+from .utils import aggregate_precipitation
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +162,7 @@ class LocalFileMeteoHandler(BaseMeteoHandler):
         data = data.dropna(subset=sensor_columns, how="all")
         n_dropped = n_before - len(data)
         if n_dropped > 0:
-            logger.debug("Dropped %s local observation row(s) with only missing sensor values", n_dropped)
+            logger.debug("Dropped %s local observation row(s) with all sensor values missing", n_dropped)
         return data
 
     async def get_station_info(self, station_id: str | None = None) -> dict[str, Any]:
@@ -301,4 +302,9 @@ class LocalFileMeteoHandler(BaseMeteoHandler):
             data = data.drop_duplicates(subset=["datetime", "station_id"])
 
         data = self._drop_empty_sensor_rows(data)
-        return data.reset_index(drop=True)
+
+        # Precipitation is available in 5min freq while all others are in 10min freq. Aggregate
+        if "precipitation" in data.columns:
+            data = aggregate_precipitation(data, freq=self.freq)
+
+        return data.sort_values(["datetime", "station_id"]).reset_index(drop=True)

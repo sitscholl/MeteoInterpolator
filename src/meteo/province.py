@@ -8,6 +8,7 @@ import httpx
 import pandas as pd
 import pytz
 
+from .utils import aggregate_precipitation
 from ..utils import split_dates
 from .base import BaseMeteoHandler
 from .sensors import SENSORS
@@ -329,14 +330,18 @@ class ProvinceAPI(BaseMeteoHandler):
         start = start.astimezone(pytz.timezone(self.timezone))
         end = end.astimezone(pytz.timezone(self.timezone))
 
-        if self.inclusive in ("both", "right"):
-            end = end - pd.Timedelta(self.freq)
-            if end < start:
-                logger.warning(
-                    f"Adjusted end time {end} is before start {start} after applying inclusive='{self.inclusive}'."
-                )
-        
-        dates_split = split_dates(start, end, freq = self.freq, n_days = self.chunk_size_days, split_on_year=split_on_year)
+        #use 5min frequency for requests because precipitation is recorded at 5min intervals
+        #because other sensors are at 10min intervals, precipitation is later summed and final data returned at 10min frequency
+        request_freq = "5min"
+        query_end = end - pd.Timedelta(request_freq)
+
+        dates_split = split_dates(
+            start,
+            query_end,
+            freq=request_freq,
+            n_days=self.chunk_size_days,
+            split_on_year=split_on_year,
+        )
 
         # Start the workers
         raw_responses = []
@@ -406,32 +411,11 @@ class ProvinceAPI(BaseMeteoHandler):
         ).dt.tz_convert(target_timezone)
 
         # Precipitation is available in 5min freq while all others are in 10min freq. Aggregate
-        timestamps_utc = df_pivot["datetime"].dt.tz_convert("UTC")
-        on_grid = timestamps_utc.eq(timestamps_utc.dt.floor(self.freq))
-
-        result = df_pivot.loc[on_grid].copy()
-
         if "precipitation" in df_pivot.columns:
-            rain = (
-                df_pivot.assign(
-                    datetime=df_pivot["datetime"].dt.tz_convert("UTC")
-                )
-                .set_index("datetime")
-                .groupby("station_id")["precipitation"]
-                .resample(self.freq, closed="right", label="right")
-                .sum(min_count=1)
-                .reset_index()
-            )
-            rain["datetime"] = rain["datetime"].dt.tz_convert(target_timezone)
+            df_pivot = aggregate_precipitation(df_pivot, freq=self.freq)
 
-            result = result.drop(columns="precipitation").merge(
-                rain,
-                on=["station_id", "datetime"],
-                how="outer",
-                validate="one_to_one",
-            )
+        return df_pivot.sort_values(["datetime", "station_id"]).reset_index(drop=True)
 
-        return result.sort_values(["datetime", "station_id"]).reset_index(drop=True)
 
 if __name__ == '__main__':
     
