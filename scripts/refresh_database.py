@@ -1,7 +1,6 @@
 import argparse
 import asyncio
 import logging
-from dataclasses import replace
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -65,22 +64,23 @@ async def _main() -> None:
     logger.info("=" * 50)
 
     config = load_config_file(args.config)
-    meteo_config = MeteoDataConfig.from_config(config['meteo_data'])
+    meteo_options = dict(config['meteo_data'])
     if args.observations_path is not None or args.metadata_path is not None:
-        loader_config = dict(meteo_config.loader_config)
+        loader_config = dict(meteo_options['loader'])
         if loader_config.get('handler') != 'local_file':
             raise ValueError('Observation and metadata path overrides require a local_file loader.')
         if args.observations_path is not None:
             loader_config['observations_path'] = args.observations_path
         if args.metadata_path is not None:
             loader_config['station_metadata_path'] = args.metadata_path
-        meteo_config = replace(meteo_config, loader_config=loader_config)
+        meteo_options['loader'] = loader_config
+    meteo_config = MeteoDataConfig.model_validate(meteo_options)
     db_handler = meteo_config.create_database_handler()
 
     try:
         loader = meteo_config.create_meteo_loader()
         resampler = meteo_config.create_meteo_resampler()
-        ingestor_config = dict(meteo_config.ingestor_config)
+        ingestor_config = meteo_config.ingestor_options
         ingestor_config.setdefault('default_start_date', datetime(2000, 1, 1, tzinfo=ZoneInfo('UTC')))
         ingestor = MeteoIngestor(
             loader = loader,

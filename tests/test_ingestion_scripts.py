@@ -3,6 +3,7 @@ import importlib
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -10,7 +11,12 @@ import src.config as config_module
 
 
 @pytest.fixture
-def script_environment(monkeypatch):
+def script_environment(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    for directory in ('configured', 'override'):
+        folder = tmp_path / directory
+        folder.mkdir()
+        (folder / 'stations.csv').write_text('station_id\n', encoding='utf-8')
     config = {
         "meteo_data": {
             "loader": {
@@ -20,10 +26,10 @@ def script_environment(monkeypatch):
                 "timezone": "Europe/Rome",
             },
             "database": {"engine": "sqlite:///configured.db"},
+            "scheduler": {"hour": 3},
             "resampling": {"target_freq": "h", "min_coverage": 0.6},
             "database_ingestion": {
                 "overlap_days": 5,
-                "default_start_date": datetime(2010, 1, 1, tzinfo=UTC),
             },
         },
         "dem": {"path": "configured-dem.tif"},
@@ -68,8 +74,8 @@ def test_scripts_use_nested_config_and_explicit_path_overrides(script_environmen
     env.database_factory.assert_called_once_with(engine="sqlite:///configured.db")
     expected_prefix = "override" if override_paths else "configured"
     env.loader_factory.assert_called_once_with(
-        "local_file", observations_path=f"{expected_prefix}/*.csv",
-        station_metadata_path=f"{expected_prefix}/stations.csv", timezone="Europe/Rome",
+        "local_file", observations_path=[f"{expected_prefix}/*.csv"],
+        station_metadata_path=f"{expected_prefix}/stations.csv", timezone=ZoneInfo("Europe/Rome"),
     )
     # Applying CLI overrides must not mutate the source configuration.
     assert env.config["meteo_data"]["loader"]["observations_path"] == "configured/*.csv"
@@ -77,7 +83,7 @@ def test_scripts_use_nested_config_and_explicit_path_overrides(script_environmen
     assert options["resampler"].target_freq == "h"
     assert options["resampler"].min_coverage == 0.6
     assert options["overlap_days"] == 5
-    assert options["default_start_date"] == datetime(2010, 1, 1, tzinfo=UTC)
+    assert options["default_start_date"] == datetime(2000, 1, 1, tzinfo=UTC)
     env.database.close.assert_called_once()
     if script == "add_local_observations_to_db":
         env.ingestor.upsert_station.assert_awaited_once()
@@ -89,13 +95,13 @@ def test_scripts_use_nested_config_and_explicit_path_overrides(script_environmen
 
 
 @pytest.mark.parametrize("script", ["add_local_observations_to_db", "refresh_database"])
-def test_scripts_close_database_when_resampler_creation_fails(script_environment, script):
+def test_scripts_validate_config_before_creating_database(script_environment, script):
     env = script_environment
     env.config["meteo_data"]["resampling"]["min_coverage"] = 0
     module = env.prepare(script)
     with pytest.raises(ValueError, match="min_coverage"):
         asyncio.run(module._main())
-    env.database.close.assert_called_once()
+    env.database_factory.assert_not_called()
 
 
 def test_refresh_script_uses_configured_remote_loader(script_environment):
@@ -103,4 +109,45 @@ def test_refresh_script_uses_configured_remote_loader(script_environment):
     env.config["meteo_data"]["loader"] = {"handler": "province_api"}
     module = env.prepare("refresh_database")
     asyncio.run(module._main())
-    env.loader_factory.assert_called_once_with("province_api")
+    env.loader_factory.assert_called_once_with(
+        "province_api", chunk_size_days=365, timeout=20,
+        max_concurrent_requests=5, sleep_time=1,
+    )
+
+
+def test_local_ingestion_discards_remote_options_before_validation(script_environment):
+    env = script_environment
+    env.config["meteo_data"]["loader"] = {
+        "handler": "province_api", "timeout": 40, "stations": "station-a",
+    }
+    module = env.prepare(
+        "add_local_observations_to_db",
+        ["-f", "override/*.csv", "-m", "override/stations.csv"],
+    )
+    asyncio.run(module._main())
+    env.loader_factory.assert_called_once_with(
+        "local_file", observations_path=["override/*.csv"],
+        station_metadata_path="override/stations.csv", timezone=ZoneInfo("UTC"),
+    )
+    assert env.config["meteo_data"]["loader"] == {
+        "handler": "province_api", "timeout": 40, "stations": "station-a",
+    }
+
+
+@pytest.mark.parametrize("script", ["add_local_observations_to_db", "refresh_database"])
+def test_scripts_apply_metadata_override_before_validation(script_environment, script):
+    env = script_environment
+    env.config["meteo_data"]["loader"]["station_metadata_path"] = "missing/stations.csv"
+    module = env.prepare(script, ["-m", "override/stations.csv"])
+    asyncio.run(module._main())
+    assert env.loader_factory.call_args.kwargs["station_metadata_path"] == "override/stations.csv"
+    assert env.config["meteo_data"]["loader"]["station_metadata_path"] == "missing/stations.csv"
+
+
+def test_refresh_rejects_path_overrides_for_remote_loader(script_environment):
+    env = script_environment
+    env.config["meteo_data"]["loader"] = {"handler": "province_api"}
+    module = env.prepare("refresh_database", ["-m", "override/stations.csv"])
+    with pytest.raises(ValueError, match="require a local_file loader"):
+        asyncio.run(module._main())
+    env.database_factory.assert_not_called()

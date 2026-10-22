@@ -1,7 +1,6 @@
 import argparse
 import asyncio
 import logging
-from dataclasses import replace
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -66,8 +65,15 @@ async def _main() -> None:
     logger.info("=" * 50)
 
     config = load_config_file(args.config)
-    meteo_config = MeteoDataConfig.from_config(config['meteo_data'])
-    loader_config = dict(meteo_config.loader_config)
+    meteo_options = dict(config['meteo_data'])
+    configured_loader = meteo_options['loader']
+    if configured_loader.get('handler') == 'local_file':
+        loader_config = dict(configured_loader)
+    else:
+        # Provider-specific options do not apply when switching to local files.
+        loader_config = {
+            'stations': configured_loader['stations']
+        } if 'stations' in configured_loader else {}
     loader_config['handler'] = 'local_file'
     loader_config.setdefault('observations_path', 'data/province/station_files/*.csv')
     loader_config.setdefault('station_metadata_path', 'data/province/stations.csv')
@@ -76,7 +82,8 @@ async def _main() -> None:
         loader_config['observations_path'] = args.observations_path
     if args.metadata_path is not None:
         loader_config['station_metadata_path'] = args.metadata_path
-    meteo_config = replace(meteo_config, loader_config=loader_config)
+    meteo_options['loader'] = loader_config
+    meteo_config = MeteoDataConfig.model_validate(meteo_options)
     db_handler = meteo_config.create_database_handler()
 
     dem = None
@@ -85,7 +92,7 @@ async def _main() -> None:
         resampler = meteo_config.create_meteo_resampler()
         dem = load_dem(**config['dem'])
 
-        ingestor_config = dict(meteo_config.ingestor_config)
+        ingestor_config = meteo_config.ingestor_options
         ingestor_config.setdefault('default_start_date', datetime(2000, 1, 1, tzinfo=ZoneInfo('UTC')))
         ingestor = MeteoIngestor(
             loader = local_loader,
