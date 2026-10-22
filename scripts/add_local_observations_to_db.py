@@ -45,6 +45,12 @@ async def _main() -> None:
         help="Path to configuration file.",
     )
     parser.add_argument(
+        "-s",
+        "--skip_existing",
+        action='store_true',
+        help="Skip stations that already exist in the database and only add new stations",
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -105,6 +111,9 @@ async def _main() -> None:
 
         results = []
         for st_id in station_info:
+            if args.skip_existing and db_handler.station_exists(st_id):
+                logger.info("Skipping station %s because it is already in the database", st_id)
+                continue
             refresh_result = await ingestor.upsert_station(
                 station_id = st_id,
                 dem = dem,
