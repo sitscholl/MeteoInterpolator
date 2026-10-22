@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import pandera.pandas as pa
 import pandera.geopandas as pg
 
@@ -9,6 +10,13 @@ def _is_timezone_aware(s) -> bool:
         return False
     return getattr(s.dt, "tz", None) is not None
 
+def _clean_humidity(x):
+    x = x.where(x.between(0, 101))
+    return x.clip(upper=100)
+
+_tair_parser = pa.Parser(lambda x: x.where(x.between(-50, 50) & np.isfinite(x)))
+_zero_parser = pa.Parser(lambda x: x.where((x >= 0) & np.isfinite(x)))
+
 def station_data_schema(timezone: str | None = None) -> pa.DataFrameSchema:
     checks = pa.Check(
         _is_timezone_aware,
@@ -16,30 +24,24 @@ def station_data_schema(timezone: str | None = None) -> pa.DataFrameSchema:
         error="datetime must be timezone-aware",
     )
     dtype = f"datetime64[ns, {timezone}]" if timezone is not None else None
-    sensor_columns = [
-        "tair_2m",
-        "tair_2m_min",
-        "tair_2m_max",
-        "relative_humidity",
-        "precipitation",
-        "wind_speed",
-        "wind_direction",
-        "wind_gust",
-        "air_pressure",
-        "sun_duration",
-        "solar_radiation",
-        "snow_height",
-        "water_level",
-        "discharge",
-    ]
     return pa.DataFrameSchema(
-        {
+        columns={
             "datetime": pa.Column(dtype, checks=checks, coerce=timezone is not None),
             "station_id": pa.Column(str, coerce=True),
-            **{
-                sensor: pa.Column(float, nullable=True, required=False, coerce=True)
-                for sensor in sensor_columns
-            },
+            "tair_2m": pa.Column(float, nullable=True, required=False, coerce=True, parsers=_tair_parser),
+            "tair_2m_min": pa.Column(float, nullable=True, required=False, coerce=True, parsers=_tair_parser),
+            "tair_2m_max": pa.Column(float, nullable=True, required=False, coerce=True, parsers=_tair_parser),
+            "relative_humidity": pa.Column(float, nullable=True, required=False, coerce=True, parsers=pa.Parser(_clean_humidity)),
+            "precipitation": pa.Column(float, nullable=True, required=False, coerce=True, parsers=_zero_parser),
+            "wind_speed": pa.Column(float, nullable=True, required=False, coerce=True, parsers=_zero_parser),
+            "wind_direction": pa.Column(float, nullable=True, required=False, coerce=True, parsers=pa.Parser(lambda x: x.where(x.between(0, 360) & np.isfinite(x)))),
+            "wind_gust": pa.Column(float, nullable=True, required=False, coerce=True, parsers=pa.Parser(lambda x: x.where(x.between(0, 150) & np.isfinite(x)))),
+            "air_pressure": pa.Column(float, nullable=True, required=False, coerce=True, parsers=pa.Parser(lambda x: x.where(x.between(700, 1200) & np.isfinite(x)))),
+            "sun_duration": pa.Column(float, nullable=True, required=False, coerce=True, parsers=_zero_parser),
+            "solar_radiation": pa.Column(float, nullable=True, required=False, coerce=True, parsers=_zero_parser),
+            "snow_height": pa.Column(float, nullable=True, required=False, coerce=True, parsers=_zero_parser),
+            "water_level": pa.Column(float, nullable=True, required=False, coerce=True, parsers=pa.Parser(lambda x: x.where(np.isfinite(x)))),
+            "discharge": pa.Column(float, nullable=True, required=False, coerce=True, parsers=_zero_parser),
         },
         index = pa.Index(int),
         unique = ['datetime', 'station_id'],
