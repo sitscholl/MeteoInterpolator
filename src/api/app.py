@@ -20,6 +20,7 @@ from .schemas import (
     InterpolationFrequency,
     InterpolationRequest,
     InterpolationSubmission,
+    JobOverview,
     StationCreate,
     StationRead,
 )
@@ -162,6 +163,22 @@ def add_station_to_database(request: Request, station: StationCreate):
         crs=station.crs,
         name=new_station.name,
     )
+
+@app.get("/api/jobs", response_model=list[JobOverview])
+def get_jobs_overview(request: Request):
+    scheduler = request.app.state.scheduler
+
+    return [
+        JobOverview(
+            id=job.id,
+            name=job.name,
+            trigger=str(job.trigger),
+            next_run_time=job.next_run_time,
+            func=job.func_ref,
+        )
+        for job in scheduler.get_jobs()
+    ]
+
 
 @app.post("/api/refresh_database", response_model=DatabaseRefreshSubmission, status_code=status.HTTP_202_ACCEPTED)
 async def submit_database_refresh(request: Request):

@@ -48,6 +48,13 @@ class StationCreate(StationRead):
 class DatabaseRefreshSubmission(BaseModel):
     submitted_at: datetime
 
+class JobOverview(BaseModel):
+    id: str
+    name: str
+    trigger: str
+    next_run_time: datetime | None
+    func: str | None
+
 class InterpolationRequest(BaseModel):
     param: str
     start: Annotated[datetime, BeforeValidator(parse_datetime)]
