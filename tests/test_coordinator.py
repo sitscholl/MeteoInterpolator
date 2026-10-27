@@ -11,7 +11,6 @@ from shapely.geometry import Point
 
 from src.coordinator import InterpolationCoordinator
 from src.api.schemas import InterpolationRequest
-from src.array.writer.tiff_writer import TiffWriter
 from src.domain.dem import DEM
 from src.interpolate import DistanceField
 from src.meteo.base import BaseMeteoHandler, Station
@@ -167,7 +166,7 @@ def test_build_distance_fields_requires_a_distance_calculator():
         runtime.build_distance_fields()
 
 
-def test_request_frequency_controls_jobs_and_writer_without_changing_shared_state(monkeypatch, tmp_path):
+def test_request_frequency_controls_jobs_without_changing_shared_state(monkeypatch, tmp_path):
     station = Station(
         id="a", x=11.0, y=46.0, crs=4326, elevation=1000.0,
         data=pd.DataFrame({
@@ -185,17 +184,14 @@ def test_request_frequency_controls_jobs_and_writer_without_changing_shared_stat
             coords={"y": [45.9, 46.1], "x": [10.9, 11.1]},
         ).rio.write_crs(4326),
     )
-    writer = TiffWriter(root=tmp_path)
     coordinator = InterpolationCoordinator(SimpleNamespace(
         db=object(), station_ids=["a"], dem=dem, gapfiller=None,
-        resampler=MeteoResampler(min_coverage=1.0), grid_writer=writer,
+        resampler=MeteoResampler(min_coverage=1.0), output_dir=tmp_path,
     ))
 
     async def prepare_requests():
-        for freq, count, first_value, date_format in (
-            ("h", 24, 0.0, "%Y-%m-%d_%H-%M"),
-            ("D", 1, 11.5, "%Y-%m-%d"),
-            ("h", 24, 0.0, "%Y-%m-%d_%H-%M"),
+        for freq, count, first_value in (
+            ("h", 24, 0.0), ("D", 1, 11.5), ("h", 24, 0.0),
         ):
             request = InterpolationRequest.model_validate({
                 "param": "tair_2m", "start": "2026-01-01", "end": "2026-01-02",
@@ -204,9 +200,8 @@ def test_request_frequency_controls_jobs_and_writer_without_changing_shared_stat
             prepared = await coordinator._prepare_request(request)
             assert len(prepared.jobs) == count
             assert prepared.jobs[0].observations["tair_2m"].tolist() == [first_value]
-            assert prepared.grid_writer is not writer
-            assert prepared.grid_writer.date_format == date_format
+            assert prepared.prediction_target is dem.data
 
     asyncio.run(prepare_requests())
     pd.testing.assert_frame_equal(station.data, original_data)
-    assert writer.date_format == "%Y_%m_%d_%H%M%S"
+    assert coordinator.context.resampler.min_coverage == 1.0

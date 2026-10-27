@@ -135,7 +135,6 @@ def test_interpolator_returns_result_and_adds_idw_residuals():
     assert fitted.residual_summary["n"] == 3.0
     assert isinstance(result, InterpolationPrediction)
     assert result.used_residuals
-    assert result.target_type == "grid"
     assert result.prediction.dims == ("y", "x")
     assert result.vertical_prediction.dims == ("y", "x")
     assert result.residual_prediction.dims == ("y", "x")
@@ -146,56 +145,7 @@ def test_interpolator_returns_result_and_adds_idw_residuals():
     assert float(result.prediction.sel(y=0.0, x=2.0)) == pytest.approx(2.0)
 
 
-def test_interpolator_predicts_points_with_idw_residuals():
-    target_grid = xr.DataArray(
-        [[0.0, 1.0, 2.0]],
-        dims=("y", "x"),
-        coords={"y": [0.0], "x": [0.0, 1.0, 2.0]},
-        name="elevation",
-    ).rio.write_crs(4326)
-    observations = pd.DataFrame(
-        {
-            "station_id": ["a", "b", "c"],
-            "elevation": [0.0, 1.0, 2.0],
-            "x": [0.0, 1.0, 2.0],
-            "y": [0.0, 0.0, 0.0],
-            "tair_2m": [0.0, 3.0, 2.0],
-        }
-    )
-    distances = DistanceField(
-        "test_distance",
-        xr.DataArray(
-            np.array(
-                [
-                    [[0.0, 1.0, 2.0]],
-                    [[1.0, 0.0, 1.0]],
-                    [[2.0, 1.0, 0.0]],
-                ]
-            ),
-            dims=("id", "y", "x"),
-            coords={"id": ["a", "b", "c"], "y": [0.0], "x": [0.0, 1.0, 2.0]},
-        ),
-    )
-    job = InterpolationJob(
-        timestamp=pd.Timestamp("2026-05-13"),
-        parameter="tair_2m",
-        observations=observations,
-        training_points=_training_points(observations),
-    )
-    interpolator = Interpolator(
-        vertical_model=LinearVerticalModel(),
-        residual_model=InverseDistanceWeighting(neighbours=1),
-    )
-    observations.attrs["crs"] = 4326
-
-    fitted = interpolator.fit(job)
-    result = interpolator.predict(fitted, observations, distance_fields=distances)
-
-    assert isinstance(result, InterpolationPrediction)
-    assert result.used_residuals
-    assert result.target_type == "points"
-    assert isinstance(result.prediction, pd.Series)
-    assert isinstance(result.vertical_prediction, pd.Series)
-    assert isinstance(result.residual_prediction, pd.Series)
-    assert result.prediction.index.tolist() == ["a", "b", "c"]
-    assert result.prediction.tolist() == pytest.approx([0.0, 3.0, 2.0])
+def test_interpolator_rejects_dataframe_prediction_targets():
+    interpolator = Interpolator(vertical_model=LinearVerticalModel())
+    with pytest.raises(TypeError, match="must be  an xarray DataArray"):
+        interpolator.predict(None, pd.DataFrame({"elevation": [0.]}))
