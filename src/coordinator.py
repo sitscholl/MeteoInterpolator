@@ -26,6 +26,7 @@ from .runtime import RuntimeContext
 from .utils import get_date_format_from_freq, to_utc_timestamp
 from .worker import InterpolationJobResult, process_interpolation_job
 from .write import write_job_result
+from .utils import to_jsonable
 
 logger = logging.getLogger(__name__)
 
@@ -148,20 +149,38 @@ class InterpolationCoordinator:
         request_id = request_id or str(uuid4())
         prepared = await self._prepare_request(request)
 
+        resampler = self.context.resampler
+        named_aggs = resampler._prepare_named_aggs([request.param], resampler.default_aggfunc)
+        _, aggregation = named_aggs.get(
+            request.param, named_aggs.get(f"{request.param}_mean", (request.param, "mean"))
+        )
+        request_metadata = to_jsonable({
+            "param": request.param,
+            "start": request.start.isoformat(),
+            "end": request.end.isoformat(),
+            "timezone": request.timezone,
+            "freq": request.freq,
+            "dem_path": str(self.context.dem.path),
+            "dem_fingerprint": self.context.dem.fingerprint,
+            "resampling": {
+                "source_frequency": _INGESTION_FREQ,
+                "target_frequency": request.freq,
+                "aggregation": aggregation,
+                "min_coverage": resampler.min_coverage,
+                "resample_colmap": resampler.resample_colmap,
+                "default_aggfunc": resampler.default_aggfunc,
+            },
+            "gapfilling": {
+                "enabled": self.context.gapfiller is not None,
+                "settings": self.context.config.get("gapfilling"),
+            },
+            "distance": self.context.config.get("interpolation", {}).get("distance"),
+        })
         summaries = []
         for result in self._submit_jobs(prepared):
             output_path = None
             if result.status == "completed" and result.prediction is not None and self.context.output_dir is not None:
                     try:
-                        request_metadata = {
-                            "param": request.param,
-                            "start": request.start.isoformat(),
-                            "end": request.end.isoformat(),
-                            "timezone": request.timezone,
-                            "freq": request.freq,
-                            "dem_path": str(self.context.dem.path),
-                            "dem_fingerprint": self.context.dem.fingerprint
-                        }
                         output_path = write_job_result(
                             result,
                             root=self.context.output_dir,
@@ -261,10 +280,10 @@ class InterpolationCoordinator:
         return replace(self.get_status(request_id), **changes)
 
     def _validate_dates(self, start: datetime, end: datetime) -> None:
-        if to_utc_timestamp(self.start) >= to_utc_timestamp(self.end):
-            raise ValueError("start date must be before end date")
         if start.tzinfo is None or end.tzinfo is None:
             raise ValueError("Start and end time must both be timezone aware.")
+        if to_utc_timestamp(start) >= to_utc_timestamp(end):
+            raise ValueError("start date must be before end date")
         if start.tzinfo != end.tzinfo:
             raise ValueError(
                 f"start and end date must have the same timezone. Got {start.tzinfo} vs {end.tzinfo}"

@@ -1,7 +1,11 @@
 import datetime
 import logging
 import math
+from collections.abc import Mapping
+from dataclasses import asdict, is_dataclass
+from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from pandas.tseries.frequencies import to_offset
 from pyproj import CRS
@@ -38,10 +42,9 @@ def split_dates(start_date, end_date, freq, n_days=7, split_on_year=False):
             current_end = min(potential_end, end_date)
 
         # Safety: check we didn't go backwards
-        if current_end < current_start:
-            # This can happen if start_date is already the last timestamp of the year
-            # Force the end to be the start so we at least get one record
-            current_end = current_start
+        # This can happen if start_date is already the last timestamp of the year
+        # Force the end to be the start so we at least get one record
+        current_end = max(current_end, current_start)
 
         date_pairs.append((current_start, current_end))
         
@@ -176,3 +179,23 @@ def to_utc_timestamp(input: datetime.datetime | pd.Timestamp | str, raise_missin
         ts = ts.tz_convert('UTC')
 
     return ts
+
+def to_jsonable(value):
+    """Convert metadata values without silently stringifying unknown objects."""
+    if is_dataclass(value) and not isinstance(value, type):
+        return to_jsonable(asdict(value))
+    if isinstance(value, Mapping):
+        return {str(key): to_jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, np.ndarray)):
+        return [to_jsonable(item) for item in value]
+    if isinstance(value, np.generic):
+        return to_jsonable(value.item())
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, (datetime.datetime, datetime.date)):
+        return value.isoformat()
+    if callable(value):
+        return f"{value.__module__}.{value.__qualname__}"
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    raise TypeError(f"Unsupported output metadata type: {type(value).__name__}")

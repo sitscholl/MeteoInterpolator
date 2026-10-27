@@ -278,7 +278,8 @@ class Interpolator:
 
         if self.residual_model is not None and distance_fields is not None:
             distance_field = self._select_distance_field(distance_fields, lam_value=lam_value)
-            lam_value = distance_field.lam_value.values.item()
+            if "lam_value" in distance_field.coords:
+                lam_value = distance_field.lam_value.values.item()
             residual_prediction = self.residual_model.interpolate(y=model.residuals, distance_field=distance_field)
 
             if residual_prediction is not None:

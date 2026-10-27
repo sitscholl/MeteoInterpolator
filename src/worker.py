@@ -1,12 +1,13 @@
 import xarray as xr
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Literal, Any
 
 from .runtime import CrossValidationConfig
 from .interpolate import Interpolator, InterpolationJob, DistanceField, InterpolationPrediction, cross_validate, CrossValidationResult
 from .utils import to_utc_timestamp
+from .utils import to_jsonable
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ class InterpolationJobResult:
     status: Literal["completed", "skipped", "failed"]
     error: str | None = None
     stats: dict[str, Any] = field(default_factory=dict)
+    model_metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dataset(self):
         if self.status in ['skipped', 'failed']:
@@ -28,14 +30,14 @@ class InterpolationJobResult:
             raise ValueError("to_dataset() requires a predicted array. Got None.")
         
         job_metadata = {
+            'parameter': self.job.parameter,
             'n_observations': len(self.job.observations),
             'training_stations': self.prediction.station_ids,
-            'n_training_points': len(self.job.training_points)
+            'n_training_points': len(self.job.training_points),
         }
 
         if self.cv_result is not None:
             best_parameters, best_score = self.cv_result.get_best_parameters()
-            best_parameters = {i: j.item() for i,j in best_parameters.items()}
             cv_metadata = {
                 'enabled': True,
                 'param_grid': self.cv_result.param_grid,
@@ -57,12 +59,14 @@ class InterpolationJobResult:
             self.job.timestamp, raise_missing_timezone=True
         )
         time_value = timestamp.tz_localize(None).to_datetime64()
-        ds = ds.expand_dims(time=[time_value]).transpose("time", "y", "x") #"parameter": [self.parameter], 
+        ds = ds.expand_dims(time=[time_value]).transpose("time", "y", "x")
 
         ds.attrs['lam_value'] = self.prediction.lam_value
         ds.attrs['residuals_interpolated'] = self.prediction.used_residuals
-        ds.attrs['job_metadata'] = job_metadata
-        ds.attrs['cv_metadata'] = cv_metadata
+        ds.attrs['job_metadata'] = to_jsonable(job_metadata)
+        ds.attrs['cv_metadata'] = to_jsonable(cv_metadata)
+        ds.attrs['model_metadata'] = to_jsonable(self.model_metadata)
+        ds.attrs['residual_summary'] = to_jsonable(self.stats)
         return ds
 
 def process_interpolation_job(
@@ -126,6 +130,30 @@ def process_interpolation_job(
             prediction = prediction_result,
             cv_result = cv_result,
             status = 'completed',
+            stats = fitted.residual_summary,
+            model_metadata = to_jsonable({
+                "vertical_model": {
+                    "type": interpolator.vertical_model.key(),
+                    "settings": vars(interpolator.vertical_model),
+                    "fitted_parameters": asdict(fitted.vertical_fit),
+                },
+                "residual_model": {
+                    "configured": interpolator.residual_model is not None,
+                    "used": prediction_result.used_residuals,
+                    "type": (
+                        type(interpolator.residual_model).__name__
+                        if interpolator.residual_model is not None else None
+                    ),
+                    "settings": (
+                        vars(interpolator.residual_model)
+                        if interpolator.residual_model is not None else {}
+                    ),
+                    "distance_type": (
+                        distance_fields.distance_type if distance_fields is not None else None
+                    ),
+                },
+                "min_sample_size": interpolator.min_sample_size,
+            }),
         )
 
     except Exception as e:

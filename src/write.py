@@ -1,20 +1,36 @@
 import logging
+import os
 import shutil
 from pathlib import Path
+from time import sleep
 from uuid import uuid4
 
 from .array.crs import attach_crs_metadata
-from .utils import to_utc_timestamp
+from .utils import to_jsonable, to_utc_timestamp
 from .worker import InterpolationJobResult
 
 logger = logging.getLogger(__name__)
+
+def _publish_store(partial_filename: Path, out_filename: Path) -> None:
+    for attempt in range(5):
+        if out_filename.exists():
+            raise FileExistsError(f"Output store already exists: {out_filename}")
+        try:
+            partial_filename.replace(out_filename)
+            return
+        except PermissionError:
+            # Windows can briefly lock newly written directories. Retry only
+            # publication, without recomputing or rewriting the completed store.
+            if os.name != "nt" or attempt == 4:
+                raise
+            sleep(.05 * 2 ** attempt)
 
 def write_job_result(
     result: InterpolationJobResult,
     root: str | Path,
     request_id: str,
     metadata: dict,
-    ):
+    ) -> Path:
 
     if result.status in ['failed', 'skipped']:
         raise ValueError(f"Writing job results only works on completed interpolation jobs. Got job with status {result.status}")
@@ -36,10 +52,11 @@ def write_job_result(
 
     try:
         ds = result.to_dataset()
-        ds.attrs['request_metadata'] = metadata
+        ds.attrs['request_metadata'] = to_jsonable(metadata)
 
-        ds.to_zarr(partial_filename, mode = 'w-')
-        partial_filename.replace(out_filename)
+        store = ds.to_zarr(partial_filename, mode='w-', zarr_format=3, consolidated=False)
+        store.close()
+        _publish_store(partial_filename, out_filename)
     except Exception as e:
         if partial_filename.exists():
             shutil.rmtree(partial_filename)
