@@ -186,7 +186,9 @@ def to_jsonable(value):
         return to_jsonable(asdict(value))
     if isinstance(value, Mapping):
         return {str(key): to_jsonable(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple, np.ndarray)):
+    if isinstance(value, np.ndarray):
+        return to_jsonable(value.tolist())
+    if isinstance(value, (list, tuple)):
         return [to_jsonable(item) for item in value]
     if isinstance(value, np.generic):
         return to_jsonable(value.item())
