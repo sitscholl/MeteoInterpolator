@@ -42,17 +42,22 @@ def write_job_result(
     zarr_name = f"{result.job.parameter}_{metadata['freq']}_{job_timestamp:%Y%m%dT%H%M%SZ}.zarr"
     out_filename = Path(root / zarr_name)
 
-    partial_id = str(uuid4())
-    partial_filename = out_filename.with_name(
-        f".{out_filename.stem}.partial_{partial_id}.zarr"
-    )
+    # Zarr adds its own temporary filenames inside this directory. Keep the
+    # directory name short enough for normal Windows paths with a request UUID.
+    partial_filename = root / f".partial_{uuid4().hex}.zarr"
 
     if out_filename.exists():
         raise ValueError(f"Output file {out_filename} already exists! Cannot write job result.")
 
     try:
         ds = result.to_dataset()
+        if ds.rio.crs is None:
+            raise ValueError("Output dataset must define a CRS.")
+        ds = attach_crs_metadata(ds, ds.rio.crs)
         ds.attrs['request_metadata'] = to_jsonable(metadata)
+        ds.attrs = to_jsonable(ds.attrs)
+        for name in ds.variables:
+            ds[name].attrs = to_jsonable(ds[name].attrs)
 
         store = ds.to_zarr(partial_filename, mode='w-', zarr_format=3, consolidated=False)
         store.close()
