@@ -58,12 +58,3 @@ cross_validation:
   param_grid:
     lam_value: [0, 25, 50, 75, 100, 125, 150, 175, 200]
   select_by: rmse
-
-output:
-  format: tiff
-  options:
-    root: data/results
-    # filename_pattern supports {var}, {variable}, {date}, {param}, and {suffix}
-    filename_pattern: "{date}_{var}"
-    # date_format defaults from request frequency, e.g. "%Y-%m-%d" for daily output.
-    # date_format: "%Y%m%d"

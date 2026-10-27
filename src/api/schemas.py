@@ -61,7 +61,6 @@ class InterpolationRequest(BaseModel):
     end: Annotated[datetime, BeforeValidator(parse_datetime)]
     timezone: Annotated[str, AfterValidator(validate_timezone)] = 'Europe/Rome'
     freq: InterpolationFrequency = 'D'
-    target_points: list[tuple[float, float]] | None = None ##TODO: Decide final datatype for target_points support
 
     @model_validator(mode='after')
     def attach_timezone(self) -> Self:

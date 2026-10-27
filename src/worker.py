@@ -1,6 +1,4 @@
 import xarray as xr
-import pandas as pd
-import geopandas as gpd
 
 import logging
 from dataclasses import dataclass, field
@@ -8,6 +6,7 @@ from typing import Literal, Any
 
 from .runtime import CrossValidationConfig
 from .interpolate import Interpolator, InterpolationJob, DistanceField, InterpolationPrediction, cross_validate, CrossValidationResult
+from .utils import to_utc_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -20,11 +19,55 @@ class InterpolationJobResult:
     error: str | None = None
     stats: dict[str, Any] = field(default_factory=dict)
 
+    def to_dataset(self):
+        if self.status in ['skipped', 'failed']:
+            raise ValueError(f"to_dataset() works only with completed Interpolation Jobs. Status={self.status}")
+        if self.prediction is None:
+            raise ValueError("to_dataset() requires an InterpolationPrediction object. Got None")
+        if self.prediction.prediction is None:
+            raise ValueError("to_dataset() requires a predicted array. Got None.")
+        
+        job_metadata = {
+            'n_observations': len(self.job.observations),
+            'training_stations': self.prediction.station_ids,
+            'n_training_points': len(self.job.training_points)
+        }
+
+        if self.cv_result is not None:
+            best_parameters, best_score = self.cv_result.get_best_parameters()
+            best_parameters = {i: j.item() for i,j in best_parameters.items()}
+            cv_metadata = {
+                'enabled': True,
+                'param_grid': self.cv_result.param_grid,
+                'n_splits': self.cv_result.n_splits,
+                'selection_metric': self.cv_result.selection_metric,
+                'cv_search_stopped': self.cv_result.search_stopped,
+                'selected_lam_value': self.prediction.lam_value,
+                'best_parameters': best_parameters,
+                'best_score': best_score
+            }
+        else:
+            cv_metadata = {
+                'enabled': False
+            }
+
+        ds = self.prediction.to_dataset(parameter_name=self.job.parameter)
+
+        timestamp = to_utc_timestamp(
+            self.job.timestamp, raise_missing_timezone=True
+        )
+        time_value = timestamp.tz_localize(None).to_datetime64()
+        ds = ds.expand_dims(time=[time_value]).transpose("time", "y", "x") #"parameter": [self.parameter], 
+
+        ds.attrs['job_metadata'] = job_metadata
+        ds.attrs['cv_metadata'] = cv_metadata
+        return ds
+
 def process_interpolation_job(
     job: InterpolationJob,
     interpolator: Interpolator,
     cross_validation_config: CrossValidationConfig,
-    prediction_target: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame,
+    prediction_target: xr.DataArray,
     distance_fields: DistanceField | None,
 ) -> InterpolationJobResult:
     logger.info('Starting %s', job)

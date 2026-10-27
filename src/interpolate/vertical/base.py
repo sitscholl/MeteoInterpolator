@@ -15,7 +15,6 @@ class BaseFittedVerticalModel(ABC):
                 coords=X.coords,
                 dims=X.dims,
                 name=X.name,
-                attrs=X.attrs,
             )
 
         if isinstance(X, np.ndarray):

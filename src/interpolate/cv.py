@@ -12,6 +12,7 @@ from sklearn.model_selection import KFold, ParameterGrid
 
 from .distance import DistanceField
 from .interpolator import InterpolationJob, Interpolator
+from ..utils import to_utc_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +219,7 @@ def cross_validate(
                 )
                 
                 fold_job = InterpolationJob(
-                            timestamp=job.timestamp,
+                            timestamp=to_utc_timestamp(job.timestamp, raise_missing_timezone = True),
                             parameter=job.parameter,
                             observations=train_obs,
                             training_points=job.training_points.loc[train_obs['station_id'].astype(str).tolist()],

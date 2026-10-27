@@ -16,6 +16,7 @@ from ..domain.dem import DEM
 from ..domain.schemas import _OBSERVATION_POINTS_SCHEMA, _STATION_DATA_SCHEMA
 from ..interpolate import InterpolationJob
 from ..interpolate.interpolator import _REQUIRED_COLUMNS
+from ..utils import to_utc_timestamp
 
 if TYPE_CHECKING:
     from ..meteo.types import Station
@@ -204,7 +205,7 @@ class MeteoData:
             obs_station_ids = obs["station_id"].astype(str).tolist()
             obs_stations = self.stations.loc[obs_station_ids]
             job = InterpolationJob(
-                timestamp = ts,
+                timestamp = to_utc_timestamp(ts),
                 parameter = param,
                 observations = obs,
                 training_points = obs_stations,

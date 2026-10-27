@@ -2,30 +2,30 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from functools import partial
+from pathlib import Path
 from typing import Literal
 from uuid import uuid4
-from zoneinfo import ZoneInfo
 
 import geopandas as gpd
 import pandas as pd
 import rioxarray  # noqa: F401
 import xarray as xr
-from pyproj import CRS
 
 from .api.schemas import InterpolationRequest, InterpolationSubmission
-from .array.writer import GridWriter
 from .domain.meteo_data import MeteoData
-from .meteo import retrieve_stations
 from .execute.base import JobExecutor
 from .execute.serial import SerialExecutor
 from .interpolate import InterpolationJob
+from .meteo import retrieve_stations
+from .meteo.ingest import _INGESTION_FREQ
 from .runtime import RuntimeContext
 from .utils import get_date_format_from_freq
 from .worker import InterpolationJobResult, process_interpolation_job
-from .meteo.ingest import _INGESTION_FREQ
+from .write import write_job_result
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +35,8 @@ RunStatus = Literal["queued", "running", "completed", "failed"]
 
 @dataclass(frozen=True)
 class PreparedInterpolationRun:
-    prediction_target: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame
+    prediction_target: xr.DataArray
     jobs: list[InterpolationJob]
-    grid_writer: GridWriter | None
 
 
 @dataclass(frozen=True)
@@ -55,18 +54,23 @@ class InterpolationRunState:
     n_outputs: int | None = None
     error: str | None = None
 
+@dataclass(frozen=True)
+class JobSummary:
+    timestamp: pd.Timestamp
+    parameter: str
+    status: Literal['completed', 'skipped', 'failed']
+    output_path: str | Path | None
+    error: str | None = None
 
 @dataclass(frozen=True)
 class InterpolationRunResult:
     request_id: str
     request: InterpolationRequest
-    job_results: list[InterpolationJobResult]
-    outputs: list[xr.Dataset | xr.DataArray] = field(default_factory=list)
+    job_results: list[JobSummary]
 
     @property
     def status(self) -> RunStatus:
         return "completed" if any(result.status == "completed" for result in self.job_results) else "failed"
-
 
 @dataclass
 class InterpolationCoordinator:
@@ -83,12 +87,8 @@ class InterpolationCoordinator:
             raise ValueError(f"freq must be one of 'D' or 'h'. Got {request.freq}")
 
         self._validate_dates(request.start, request.end)
-        prediction_target = self._prepare_target_points(request.target_points)
-        target_crs = (
-            prediction_target.rio.crs
-            if isinstance(prediction_target, xr.DataArray)
-            else prediction_target.attrs["crs"]
-        )
+        prediction_target = self.context.dem.data
+        target_crs = prediction_target.rio.crs
 
         stations = retrieve_stations(
             db = self.context.db,
@@ -120,16 +120,6 @@ class InterpolationCoordinator:
         meteo_data = meteo_data.update_elevation(self.context.dem, overwrite=True)
 
         jobs = list(meteo_data.build_jobs(request.start, request.end, request.param))
-        grid_writer = (
-            self.context.grid_writer.initialize(
-                param=request.param,
-                start=request.start,
-                end=request.end,
-                freq=target_freq,
-            )
-            if self.context.grid_writer is not None
-            else None
-        )
 
         datefmt = get_date_format_from_freq(target_freq)
         logger.info(
@@ -144,47 +134,7 @@ class InterpolationCoordinator:
         return PreparedInterpolationRun(
             prediction_target=prediction_target,
             jobs=jobs,
-            grid_writer=grid_writer,
         )
-
-    def _finalize_job(
-        self,
-        job_result: InterpolationJobResult,
-        grid_writer: GridWriter | None,
-    ) -> list[xr.Dataset | xr.DataArray]:
-        if job_result.status != "completed" or job_result.prediction is None:
-            return []
-
-        prediction = job_result.prediction
-        outputs: list[xr.Dataset | xr.DataArray] = []
-        for suffix, result_var in (
-            (None, prediction.prediction),
-            ("vertical", prediction.vertical_prediction),
-            ("residual", prediction.residual_prediction),
-        ):
-            if not isinstance(result_var, (xr.DataArray, xr.Dataset)):
-                continue
-            output = GridWriter.prepare_grid_for_output(
-                result_var,
-                job_result.job.parameter,
-                job_result.job.timestamp,
-                suffix,
-            )
-            if grid_writer is not None:
-                grid_writer.write(output)
-            outputs.append(output)
-
-        if (
-            job_result.cv_result is not None
-            and self.context.db is not None
-            and hasattr(self.context.db, "store_cv_results")
-        ):
-            self.context.db.store_cv_results(
-                job_result.cv_result.fold_results,
-                timestamp=job_result.job.timestamp,
-            )
-
-        return outputs
 
     async def run(
         self,
@@ -192,29 +142,62 @@ class InterpolationCoordinator:
         request_id: str | None = None,
     ) -> InterpolationRunResult:
 
-        ##TODO: InterpolationRequest.target_points data type changed. Implement support for new input structure
         if request.param != 'tair_2m':
             raise NotImplementedError(f"Interpolation is currently only implemented for parameter 'tair_2m'. Got {request.param}")
 
         request_id = request_id or str(uuid4())
         prepared = await self._prepare_request(request)
-        job_results = self._submit_jobs(prepared)
 
-        outputs: list[xr.Dataset | xr.DataArray] = []
-        for job_result in job_results:
-            outputs.extend(self._finalize_job(job_result, prepared.grid_writer))
-
-        if not any(result.status == "completed" for result in job_results):
-            raise ValueError(
-                "No interpolation results were produced for parameter "
-                f"{request.param} over period {request.start} - {request.end}."
+        summaries = []
+        for result in self._submit_jobs(prepared):
+            output_path = None
+            if result.status == "completed" and result.prediction is not None and self.context.output_dir is not None:
+                    try:
+                        request_metadata = {
+                            "param": request.param,
+                            "start": request.start.isoformat(),
+                            "end": request.end.isoformat(),
+                            "timezone": request.timezone,
+                            "freq": request.freq,
+                            "dem_path": str(self.context.dem.path),
+                            "dem_fingerprint": self.context.dem.fingerprint
+                        }
+                        output_path = write_job_result(
+                            result,
+                            root=self.context.output_dir,
+                            request_id=request_id,
+                            metadata=request_metadata,
+                        )
+                    except Exception as e:
+                        logger.exception(f"Error writing job result for request {request_id}")
+                        summaries.append(
+                            JobSummary(
+                                timestamp=result.job.timestamp,
+                                parameter=result.job.parameter,
+                                status="failed",
+                                error=str(e),
+                                output_path=None,
+                            )
+                        )
+                        del result
+                        continue
+                
+            summaries.append(
+                JobSummary(
+                    timestamp=result.job.timestamp,
+                    parameter=result.job.parameter,
+                    status=result.status,
+                    error=result.error,
+                    output_path=output_path,
+                )
             )
+
+            del result #free up memory immediately
 
         return InterpolationRunResult(
             request_id=request_id,
             request=request,
-            job_results=job_results,
-            outputs=outputs,
+            job_results=summaries,
         )
 
     async def submit(self, request: InterpolationRequest) -> InterpolationSubmission:
@@ -230,7 +213,7 @@ class InterpolationCoordinator:
         )
         return InterpolationSubmission(request_id=request_id, status="queued")
 
-    def _submit_jobs(self, prepared: PreparedInterpolationRun) -> list[InterpolationJobResult]:
+    def _submit_jobs(self, prepared: PreparedInterpolationRun) -> Iterable[InterpolationJobResult]:
         run_job = partial(
             process_interpolation_job,
             interpolator=self.context.interpolator,
@@ -238,7 +221,7 @@ class InterpolationCoordinator:
             prediction_target=prepared.prediction_target,
             distance_fields=self.context.distance_fields,
         )
-        return list(self.executor.map(run_job, prepared.jobs))
+        return self.executor.map(run_job, prepared.jobs)
 
     def get_status(self, request_id: str) -> InterpolationRunState:
         try:
@@ -254,6 +237,16 @@ class InterpolationCoordinator:
         )
         try:
             result = await self.run(request, request_id=request_id)
+            self._runs[request_id] = self._replace_run_state(
+                request_id,
+                status=result.status,
+                finished_at=datetime.now(),
+                n_jobs=len(result.job_results),
+                n_completed=sum(1 for job_result in result.job_results if job_result.status == "completed"),
+                n_skipped=sum(1 for job_result in result.job_results if job_result.status == "skipped"),
+                n_failed=sum(1 for job_result in result.job_results if job_result.status == "failed"),
+                n_outputs=len([i for i in result.job_results if i.output_path is not None]),
+            )
         except Exception as exc:
             logger.exception("Interpolation request %s failed", request_id)
             self._runs[request_id] = self._replace_run_state(
@@ -263,17 +256,6 @@ class InterpolationCoordinator:
                 error=str(exc),
             )
             return
-
-        self._runs[request_id] = self._replace_run_state(
-            request_id,
-            status=result.status,
-            finished_at=datetime.now(),
-            n_jobs=len(result.job_results),
-            n_completed=sum(1 for job_result in result.job_results if job_result.status == "completed"),
-            n_skipped=sum(1 for job_result in result.job_results if job_result.status == "skipped"),
-            n_failed=sum(1 for job_result in result.job_results if job_result.status == "failed"),
-            n_outputs=len(result.outputs),
-        )
 
     def _replace_run_state(self, request_id: str, **changes) -> InterpolationRunState:
         return replace(self.get_status(request_id), **changes)
@@ -287,65 +269,6 @@ class InterpolationCoordinator:
             raise ValueError(
                 f"start and end date must have the same timezone. Got {start.tzinfo} vs {end.tzinfo}"
             )
-
-    def _prepare_target_points(
-        self,
-        target_points: xr.DataArray | pd.DataFrame | gpd.GeoDataFrame | None,
-    ) -> xr.DataArray | pd.DataFrame | gpd.GeoDataFrame:
-        if target_points is None:
-            return self.context.dem.data
-
-        dem_crs = self.context.dem.crs
-
-        if isinstance(target_points, xr.DataArray):
-            if target_points.rio.crs is None:
-                target_points = target_points.rio.write_crs(dem_crs, inplace=False)
-            if CRS.from_user_input(target_points.rio.crs) != CRS.from_user_input(dem_crs):
-                raise ValueError(
-                    "Target grid CRS must match DEM CRS. Reproject/resample the target grid before interpolation."
-                )
-            return target_points
-
-        if isinstance(target_points, gpd.GeoDataFrame):
-            if target_points.crs is None:
-                raise ValueError("Target point GeoDataFrame must define a CRS.")
-            points = target_points.to_crs(dem_crs).copy()
-            if "station_id" not in points.columns:
-                points["station_id"] = points.index.astype(str)
-            points["x"] = points.geometry.x.astype(float)
-            points["y"] = points.geometry.y.astype(float)
-        elif isinstance(target_points, pd.DataFrame):
-            points = target_points.copy()
-            point_crs = points.attrs.get("crs")
-            if point_crs is not None and CRS.from_user_input(point_crs) != CRS.from_user_input(dem_crs):
-                raise ValueError(
-                    "Plain DataFrame target_points cannot be reprojected. "
-                    "Pass a GeoDataFrame with geometry and CRS, or provide x/y in the DEM CRS."
-                )
-            points.attrs["crs"] = dem_crs
-            if "station_id" not in points.columns:
-                points["station_id"] = points.index.astype(str)
-        else:
-            raise TypeError(
-                "target_points must be None, an xarray DataArray, a pandas DataFrame, "
-                f"or a GeoDataFrame. Got {type(target_points)}"
-            )
-
-        missing_xy = [col for col in ("x", "y") if col not in points.columns]
-        if missing_xy:
-            raise ValueError(f"Point target predictions require x/y columns. Missing: {missing_xy}")
-
-        if "elevation" not in points.columns:
-            x_indexer = xr.DataArray(points["x"].to_numpy(dtype=float), dims=("station_id",))
-            y_indexer = xr.DataArray(points["y"].to_numpy(dtype=float), dims=("station_id",))
-            points["elevation"] = self.context.dem.data.sel(
-                x=x_indexer,
-                y=y_indexer,
-                method="nearest",
-            ).to_numpy()
-
-        points.attrs["crs"] = dem_crs
-        return points
 
     async def shutdown(self) -> None:
         tasks = list(self._tasks.values())

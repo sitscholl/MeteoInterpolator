@@ -9,7 +9,6 @@ from shapely.geometry import Point
 
 from .aoi import AOI
 from .array.cache import CacheManager
-from .array.writer import GridWriter
 from .config import MeteoDataConfig
 from .datagaps import Gapfiller
 from .domain.dem import load_dem
@@ -210,16 +209,13 @@ class RuntimeContext:
                 self.distance_fields = self.build_distance_fields()
 
             ## Grid Writer
-            output_config = config.get('output')
-            if output_config is None:
-                logger.info("No output configuration provided. Results will not be saved")
-                self.grid_writer = None
-            else:
-                output_format = output_config['format']
-                self.grid_writer = GridWriter.create(output_format, **output_config.get('options', {}))
-                output_target = getattr(self.grid_writer, "root", getattr(self.grid_writer, "path", None))
-                logger.info(f"Initialized grid writer with output format {output_format} pointing to {output_target}")
-
+            self.output_dir = Path('results')
+            try:
+                self.output_dir.mkdir(exist_ok = True, parents=True)
+            except Exception as e:
+                logger.exception("Failed to initialize output directory")
+                raise
+            
             self.initialized = True
 
         except Exception as e:
