@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, UTC
 from functools import partial
 from pathlib import Path
 from typing import Literal
@@ -23,7 +23,7 @@ from .interpolate import InterpolationJob
 from .meteo import retrieve_stations
 from .meteo.ingest import _INGESTION_FREQ
 from .runtime import RuntimeContext
-from .utils import get_date_format_from_freq
+from .utils import get_date_format_from_freq, to_utc_timestamp
 from .worker import InterpolationJobResult, process_interpolation_job
 from .write import write_job_result
 
@@ -206,7 +206,7 @@ class InterpolationCoordinator:
             request_id=request_id,
             request=request,
             status="queued",
-            submitted_at=datetime.now(),
+            submitted_at=datetime.now(UTC),
         )
         self._tasks[request_id] = asyncio.create_task(
             self._run_submitted(request_id, request)
@@ -233,14 +233,14 @@ class InterpolationCoordinator:
         self._runs[request_id] = self._replace_run_state(
             request_id,
             status="running",
-            started_at=datetime.now(),
+            started_at=datetime.now(UTC),
         )
         try:
             result = await self.run(request, request_id=request_id)
             self._runs[request_id] = self._replace_run_state(
                 request_id,
                 status=result.status,
-                finished_at=datetime.now(),
+                finished_at=datetime.now(UTC),
                 n_jobs=len(result.job_results),
                 n_completed=sum(1 for job_result in result.job_results if job_result.status == "completed"),
                 n_skipped=sum(1 for job_result in result.job_results if job_result.status == "skipped"),
@@ -252,7 +252,7 @@ class InterpolationCoordinator:
             self._runs[request_id] = self._replace_run_state(
                 request_id,
                 status="failed",
-                finished_at=datetime.now(),
+                finished_at=datetime.now(UTC),
                 error=str(exc),
             )
             return
@@ -261,7 +261,7 @@ class InterpolationCoordinator:
         return replace(self.get_status(request_id), **changes)
 
     def _validate_dates(self, start: datetime, end: datetime) -> None:
-        if start >= end:
+        if to_utc_timestamp(self.start) >= to_utc_timestamp(self.end):
             raise ValueError("start date must be before end date")
         if start.tzinfo is None or end.tzinfo is None:
             raise ValueError("Start and end time must both be timezone aware.")

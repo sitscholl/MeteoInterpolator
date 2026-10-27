@@ -64,9 +64,16 @@ def localize_datetime_string(value: str, timezone: str):
 
     if ts.tzinfo is None:
         try:
-            ts = ts.tz_localize(timezone)
-        except Exception:
-            ts = ts.tz_localize(timezone, ambiguous = False, nonexistent = "shift_forward")
+            ts = ts.tz_localize(
+                timezone,
+                ambiguous="raise",
+                nonexistent="raise",
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"Cannot interpret {value!r} in timezone {timezone!r}: {exc}. "
+                "For a repeated local time, provide an explicit UTC offset."
+            ) from exc
     else:
         converted = ts.tz_convert(timezone)
         if converted != ts:

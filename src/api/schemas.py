@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import pandas as pd
 from pydantic import AfterValidator, BaseModel, BeforeValidator, model_validator
 
-from ..utils import localize_datetime_string
+from ..utils import localize_datetime_string, to_utc_timestamp
 
 RunStatus = Literal["queued", "running", "completed", "failed"]
 InterpolationFrequency = Literal["h", "D"]
@@ -66,7 +66,7 @@ class InterpolationRequest(BaseModel):
     def attach_timezone(self) -> Self:
         self.start = localize_datetime_string(self.start, self.timezone).to_pydatetime()
         self.end = localize_datetime_string(self.end, self.timezone).to_pydatetime()
-        if self.start >= self.end:
+        if to_utc_timestamp(self.start) >= to_utc_timestamp(self.end):
             raise ValueError("start date must be before end date")
         return self
 

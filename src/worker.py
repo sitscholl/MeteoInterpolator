@@ -59,6 +59,8 @@ class InterpolationJobResult:
         time_value = timestamp.tz_localize(None).to_datetime64()
         ds = ds.expand_dims(time=[time_value]).transpose("time", "y", "x") #"parameter": [self.parameter], 
 
+        ds.attrs['lam_value'] = self.prediction.lam_value
+        ds.attrs['residuals_interpolated'] = self.prediction.used_residuals
         ds.attrs['job_metadata'] = job_metadata
         ds.attrs['cv_metadata'] = cv_metadata
         return ds
