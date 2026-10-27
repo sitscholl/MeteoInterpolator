@@ -42,6 +42,8 @@ def write_job_result(
     zarr_name = f"{result.job.parameter}_{metadata['freq']}_{job_timestamp:%Y%m%dT%H%M%SZ}.zarr"
     out_filename = Path(root / zarr_name)
 
+    logger.debug("Writing job results to %s", out_filename)
+
     # Zarr adds its own temporary filenames inside this directory. Keep the
     # directory name short enough for normal Windows paths with a request UUID.
     partial_filename = root / f".partial_{uuid4().hex}.zarr"

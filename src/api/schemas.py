@@ -74,6 +74,11 @@ class InterpolationRequest(BaseModel):
     def tzinfo(self) -> ZoneInfo:
         return ZoneInfo(self.timezone)
 
+    def __repr__(self):
+        return f"InterpolationRequest (parameter: {self.param}, start: {self.start:%Y-%m-%d %H:%M}, end: {self.end:%Y-%m-%d %H:%M}, timezone: {self.timezone}, frequency: {self.freq})"
+
+    def __str__(self) -> str:
+        return self.__repr__()
 
 class InterpolationSubmission(BaseModel):
     request_id: str

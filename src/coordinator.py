@@ -146,6 +146,7 @@ class InterpolationCoordinator:
         if request.param != 'tair_2m':
             raise NotImplementedError(f"Interpolation is currently only implemented for parameter 'tair_2m'. Got {request.param}")
 
+        logger.info("Preparing %s", request)
         request_id = request_id or str(uuid4())
         prepared = await self._prepare_request(request)
 
@@ -212,6 +213,8 @@ class InterpolationCoordinator:
             )
 
             del result #free up memory immediately
+
+        logger.info("Finished %s", request)
 
         return InterpolationRunResult(
             request_id=request_id,
