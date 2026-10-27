@@ -286,8 +286,8 @@ class Interpolator:
                 self._check_grid_alignment(vertical_prediction, distance_field)
                 residual_prediction = residual_prediction.assign_coords(
                     {
-                        "x": vertical_prediction.x.values,
-                        "y": vertical_prediction.y.values,
+                        "x": vertical_prediction.coords['x'],
+                        "y": vertical_prediction.coords['y'],
                     }
                 )
                 prediction = vertical_prediction + residual_prediction

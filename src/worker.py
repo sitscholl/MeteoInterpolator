@@ -59,7 +59,7 @@ class InterpolationJobResult:
             self.job.timestamp, raise_missing_timezone=True
         )
         time_value = timestamp.tz_localize(None).to_datetime64()
-        ds = ds.expand_dims(time=[time_value]).transpose("time", "y", "x")
+        ds = ds.expand_dims(time=[time_value])
 
         ds.attrs['lam_value'] = self.prediction.lam_value
         ds.attrs['residuals_interpolated'] = self.prediction.used_residuals

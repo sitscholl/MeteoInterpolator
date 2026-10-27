@@ -89,7 +89,13 @@ def _point_distances(
     x_coords = observations["x"].to_numpy(dtype=float)
     y_coords = observations["y"].to_numpy(dtype=float)
 
-    return distance_fields.to_points(ids, x_coords, y_coords)
+    point_distances = distance_fields.to_points(ids, x_coords, y_coords)
+    # Nearest-cell sampling leaves raster cell coordinates in x/y. Associate
+    # those sampled distances with the requested station coordinates for predict.
+    return point_distances.assign_coords(
+        x=point_distances.coords["target_x"],
+        y=point_distances.coords["target_y"],
+    )
 
 def _is_marginal_improvement(candidate_score, current_best, min_improvement):
     if candidate_score is None:
@@ -107,6 +113,23 @@ def _is_marginal_improvement(candidate_score, current_best, min_improvement):
 
     denominator = max(abs(current_best), np.finfo(float).eps)
     return improvement / denominator >= min_improvement
+
+def _build_target_grid(observations: pd.DataFrame, crs: str | int):
+    required_columns = ['elevation', 'station_id', 'x', 'y']
+    missing_columns = [i for i in required_columns if i not in observations.columns]
+    if missing_columns:
+        raise ValueError(f"Cannot build target grid due to missing columns: {missing_columns}")
+
+    return xr.DataArray(
+        observations["elevation"].to_numpy(dtype=float),
+        dims=("target_id",),
+        coords={
+            "target_id": observations["station_id"].to_numpy(dtype=str),
+            "x": ("target_id", observations["x"].to_numpy(dtype=float)),
+            "y": ("target_id", observations["y"].to_numpy(dtype=float)),
+        },
+        name="elevation",
+    ).rio.write_crs(crs)
 
 @dataclass(frozen=True)
 class CrossValidationResult:
@@ -205,7 +228,7 @@ def cross_validate(
             try:
                 train_obs = observations.iloc[train_index].copy()
                 test_obs = observations.iloc[test_index].copy()
-                test_obs.attrs["crs"] = job.training_points.crs #required for estimator.predict
+                test_targets = _build_target_grid(test_obs, crs=job.training_points.crs)
                 observed_values = test_obs[job.parameter].values
                 test_ids = test_obs["station_id"].unique()
 
@@ -228,7 +251,7 @@ def cross_validate(
                 #Predict with distance correction
                 fold_prediction = estimator.predict(
                         fitted,
-                        test_obs,
+                        test_targets,
                         fold_distances,
                         **param_combination,
                     )
