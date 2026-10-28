@@ -40,6 +40,10 @@ def load_station_catalog(file: str | Path, aoi: AOI, crs: CRS | str | int):
     catalog = pd.read_csv(file, dtype={'station_id': str})
     catalog = _STATION_CATALOG_SCHEMA.validate(catalog)
 
+    n_active = sum(catalog['status'] == 'active')
+    if n_active == 0:
+        raise ValueError("No active stations found in station catalogue.")
+
     coords = gpd.points_from_xy(
         catalog["longitude"], catalog["latitude"]
     )
