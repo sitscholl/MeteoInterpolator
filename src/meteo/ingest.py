@@ -181,7 +181,7 @@ class MeteoIngestor:
 
         if not self.database.station_exists(station_id):
             raise ValueError(f"Cannot upsert station because station {station_id} does not exist in the database. Add a new station by modifying the station catalog file and restarting the application.")
-        if self.database.get_stations(station_id)[0].status == 'inactive':
+        if self.database.get_stations(station_id, include_inactive=True)[0].status == 'inactive':
             logger.warning("Requesting data for inactive station %s", station_id)
         
         try:
