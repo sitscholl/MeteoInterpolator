@@ -169,7 +169,7 @@ async def submit_database_refresh(request: Request):
         submitted_at=now_dt
     )
 
-@app.get("/api/interpolate", response_model=InterpolationSubmission)
+@app.post("/api/interpolate", response_model=InterpolationSubmission, status_code=http_status.HTTP_202_ACCEPTED)
 async def interpolate(
     request: Request,
     param: str,
