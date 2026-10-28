@@ -4,10 +4,13 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from pyproj import CRS
+
+from src.aoi import AOI
 from src.config import MeteoDataConfig
 from src.domain.dem import load_dem
 from src.meteo import MeteoIngestor
-from src.runtime import load_config_file
+from src.runtime import load_config_file, load_station_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +51,7 @@ async def _main() -> None:
         "-s",
         "--skip_existing",
         action='store_true',
-        help="Skip stations that already exist in the database and only add new stations",
+        help="Skip stations that already have observations in the database",
     )
     parser.add_argument(
         "-v",
@@ -94,9 +97,17 @@ async def _main() -> None:
 
     dem = None
     try:
+        dem = load_dem(**config['dem'])
+        aoi = AOI.from_array(dem.data)
+
+        station_catalog = load_station_catalog(meteo_config.station_catalog, aoi = aoi, crs = CRS.from_user_input(dem.crs))
+        db_handler.sync_catalog(station_catalog.drop('geometry', axis = 1))
+        active_station_ids = set(
+            station_catalog.loc[station_catalog['status'] == 'active', 'station_id']
+        )
+
         local_loader = meteo_config.create_meteo_loader()
         resampler = meteo_config.create_meteo_resampler()
-        dem = load_dem(**config['dem'])
 
         ingestor_config = meteo_config.ingestor_options
         ingestor_config.setdefault('default_start_date', datetime(2000, 1, 1, tzinfo=ZoneInfo('UTC')))
@@ -111,8 +122,11 @@ async def _main() -> None:
 
         results = []
         for st_id in station_info:
-            if args.skip_existing and db_handler.station_exists(st_id):
-                logger.info("Skipping station %s because it is already in the database", st_id)
+            if st_id not in active_station_ids:
+                logger.info("Skipping station %s because it is not active in the catalog", st_id)
+                continue
+            if args.skip_existing and db_handler.get_last_row(st_id) is not None:
+                logger.info("Skipping station %s because observations already exist in the database", st_id)
                 continue
             refresh_result = await ingestor.upsert_station(
                 station_id = st_id,

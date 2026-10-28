@@ -28,7 +28,8 @@ def load_config_file(config_file: str | Path) -> dict:
 
     return config
 
-def open_station_catalog(file: str | Path):
+def load_station_catalog(file: str | Path, aoi: AOI, crs: CRS | str | int):
+    
     file = Path(file)
 
     if not file.exists():
@@ -38,7 +39,21 @@ def open_station_catalog(file: str | Path):
 
     catalog = pd.read_csv(file, dtype={'station_id': str})
     catalog = _STATION_CATALOG_SCHEMA.validate(catalog)
-    return catalog
+
+    coords = gpd.points_from_xy(
+        catalog["longitude"], catalog["latitude"]
+    )
+    station_gdf = gpd.GeoDataFrame(
+        catalog, geometry = coords, crs = 4326
+        )
+    station_gdf = station_gdf.to_crs(crs)
+
+    stations_in_dem = aoi.filter_bbox(station_gdf)
+    stations_outside_dem = [i for i in station_gdf['station_id'].unique() if i not in stations_in_dem['station_id'].unique()]
+    if len(stations_outside_dem) > 0:
+        raise ValueError(f"All stations must be within the DEM. The following stations are outside the provided dem: {stations_outside_dem}")
+
+    return stations_in_dem
 
 @dataclass(frozen=True)
 class CrossValidationConfig:
@@ -75,41 +90,6 @@ class RuntimeContext:
     def __post_init__(self):
         if self.config is None:
             raise ValueError("RuntimeContext requires a config dictionary")
-
-    def load_station_catalog(
-        self, file: str | Path, aoi: AOI, crs: CRS | str | int
-        ):
-
-        full_catalog = open_station_catalog(file)
-
-        coords = gpd.points_from_xy(
-            full_catalog["longitude"], full_catalog["latitude"]
-        )
-        station_gdf = gpd.GeoDataFrame(
-            full_catalog, geometry = coords, crs = 4326
-            )
-        station_gdf = station_gdf.to_crs(crs)
-
-        stations_in_dem = aoi.filter_bbox(station_gdf)
-
-        if len(stations_in_dem) == 0:
-            raise ValueError("No stations are within supplied dem.")
-
-        dropped_stations = [i for i in station_gdf['station_id'].unique() if i not in stations_in_dem['station_id'].unique()]
-        if len(dropped_stations) > 0:
-            logger.warning(f"The following stations are ignored because they are outside the provided dem: {dropped_stations}")
-
-        return stations_in_dem
-
-    def get_active_stations(self, station_id: str | None = None):
-        if not hasattr(self, 'station_catalog'):
-            raise ValueError("Station catalog has not been initialized. Cannot load active stations")
-        
-        if station_id is not None:
-            selected_stations = self.station_catalog.loc[self.station_catalog['station_id'] == station_id].copy()
-        else:
-            selected_stations = self.station_catalog.copy()
-        return selected_stations
 
     def build_distance_fields(self) -> DistanceField:
         if self.distance_calculator is None:
@@ -162,7 +142,7 @@ class RuntimeContext:
             logger.info('Initialized meteo loader.')
 
             ## Stations
-            self.station_catalog = self.load_station_catalog(
+            self.station_catalog = load_station_catalog(
                 self.meteo_data_config.station_catalog, aoi = self.aoi, crs = CRS.from_user_input(self.dem.crs)
             )
             self.station_ids = self.station_catalog.station_id.tolist()
