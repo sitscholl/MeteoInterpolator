@@ -93,7 +93,7 @@ class InterpolationCoordinator:
 
         stations = retrieve_stations(
             db = self.context.db,
-            station_ids=self.context.station_ids,
+            station_ids=self.context.active_stations,
             sensor_codes=[request.param],
             start=request.start,
             end=request.end,

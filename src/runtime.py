@@ -95,22 +95,22 @@ class RuntimeContext:
         if self.distance_calculator is None:
             raise ValueError("Distance fields required by configuration but no distance calculator provided")
 
-        station_catalog = self.station_catalog.sort_values('station_id').to_crs(
-            self.dem.crs
-        )
-        x_coords = station_catalog.geometry.x.astype(float).tolist()
-        y_coords = station_catalog.geometry.y.astype(float).tolist()
+        distance_catalog = self.station_catalog.loc[self.station_catalog['station_id'].isin(self.active_stations)]
+        
+        distance_catalog = distance_catalog.sort_values('station_id').to_crs(self.dem.crs)
+        x_coords = distance_catalog.geometry.x.astype(float).tolist()
+        y_coords = distance_catalog.geometry.y.astype(float).tolist()
 
         logger.info(
             "Preparing distance fields for %s source station(s).",
-            len(station_catalog),
+            len(distance_catalog),
         )
 
         return self.distance_calculator.calculate_fields(
             self.dem,
             x_coords,
             y_coords,
-            station_catalog.station_id,
+            distance_catalog.station_id,
         )
 
     async def initialize_runtime(self, config: dict):
@@ -145,8 +145,8 @@ class RuntimeContext:
             self.station_catalog = load_station_catalog(
                 self.meteo_data_config.station_catalog, aoi = self.aoi, crs = CRS.from_user_input(self.dem.crs)
             )
-            self.station_ids = self.station_catalog.station_id.tolist()
-            logger.info("Initialized %s stations inside dem for interpolation", len(self.station_ids))
+            self.active_stations = self.station_catalog.loc[self.station_catalog['status'] == 'active', 'station_id'].tolist()
+            logger.info("Initialized %s stations inside dem for interpolation", len(self.active_stations))
 
             ## Meteo resampler
             self.resampler = self.meteo_data_config.create_meteo_resampler()

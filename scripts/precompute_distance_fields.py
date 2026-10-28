@@ -49,7 +49,7 @@ async def _main() -> None:
     sizes = distance_fields.data.sizes if distance_fields.data is not None else {}
     logger.info(
         "Prepared distance fields for %s station(s) with sizes %s.",
-        len(runtime.station_ids),
+        len(runtime.active_stations),
         dict(sizes),
     )
 
