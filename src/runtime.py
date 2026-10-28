@@ -38,6 +38,8 @@ def load_station_catalog(file: str | Path, aoi: AOI, crs: CRS | str | int):
         raise ValueError(f"Cataloge file is not a csv file. Got {file}")
 
     catalog = pd.read_csv(file, dtype={'station_id': str})
+    if catalog.empty:
+        raise ValueError("No active stations found in station catalogue.")
     catalog = _STATION_CATALOG_SCHEMA.validate(catalog)
 
     n_active = sum(catalog['status'] == 'active')

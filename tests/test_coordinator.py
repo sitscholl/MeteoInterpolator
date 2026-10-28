@@ -101,13 +101,14 @@ class _RecordingMeteoLoader(BaseMeteoHandler):
 
 def _runtime_with_distance_calculator():
     station_catalog = gpd.GeoDataFrame(
-        {"station_id": ["b", "a"]},
-        geometry=[Point(1.0, 1.0), Point(0.0, 0.0)],
+        {"station_id": ["b", "inactive", "a"], "status": ["active", "inactive", "active"]},
+        geometry=[Point(1.0, 1.0), Point(0.5, 0.5), Point(0.0, 0.0)],
         crs=4326,
-    ).set_index("station_id")
+    )
     distance_calculator = _RecordingDistanceCalculator()
     runtime = RuntimeContext(config={})
     runtime.station_catalog = station_catalog
+    runtime.active_stations = ["b", "a"]
     runtime.distance_calculator = distance_calculator
     runtime.dem = SimpleNamespace(
         crs=4326,
@@ -176,7 +177,11 @@ def test_request_frequency_controls_jobs_without_changing_shared_state(monkeypat
         }),
     )
     original_data = station.data.copy(deep=True)
-    monkeypatch.setattr("src.coordinator.retrieve_stations", lambda **kwargs: [station])
+    def retrieve(**kwargs):
+        assert kwargs['station_ids'] == ['a']
+        return [station]
+
+    monkeypatch.setattr("src.coordinator.retrieve_stations", retrieve)
     dem = DEM(
         path="test.tif", fingerprint="test",
         data=xr.DataArray(
@@ -185,7 +190,7 @@ def test_request_frequency_controls_jobs_without_changing_shared_state(monkeypat
         ).rio.write_crs(4326),
     )
     coordinator = InterpolationCoordinator(SimpleNamespace(
-        db=object(), station_ids=["a"], dem=dem, gapfiller=None,
+        db=object(), active_stations=["a"], dem=dem, gapfiller=None,
         resampler=MeteoResampler(min_coverage=1.0), output_dir=tmp_path,
     ))
 

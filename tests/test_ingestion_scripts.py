@@ -1,11 +1,13 @@
 import asyncio
 import importlib
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from zoneinfo import ZoneInfo
 
 import pytest
+import xarray as xr
 
 import src.config as config_module
 from src.database.db import InterpolationDB
@@ -54,7 +56,13 @@ def script_environment(monkeypatch, tmp_path):
         refresh_database=AsyncMock(return_value=SimpleNamespace(n_failed=0)),
     )
     ingestor_factory = Mock(return_value=ingestor)
-    dem = Mock()
+    data = xr.DataArray(
+        [[1000.0, 1000.0], [1000.0, 1000.0]], dims=('y', 'x'),
+        coords={'y': [45.9, 46.1], 'x': [10.9, 11.1]},
+    ).rio.write_crs(4326)
+    close_dem = Mock()
+    data.set_close(close_dem)
+    dem = SimpleNamespace(data=data, crs=data.rio.crs)
 
     def prepare(module_name, overrides=()):
         module = importlib.import_module(f"scripts.{module_name}")
@@ -68,7 +76,7 @@ def script_environment(monkeypatch, tmp_path):
     return SimpleNamespace(
         prepare=prepare, config=config, database=database,
         database_factory=database_factory, loader_factory=loader_factory,
-        ingestor_factory=ingestor_factory, ingestor=ingestor, dem=dem,
+        ingestor_factory=ingestor_factory, ingestor=ingestor, dem=dem, close_dem=close_dem,
     )
 
 
@@ -95,7 +103,7 @@ def test_scripts_use_nested_config_and_explicit_path_overrides(script_environmen
     env.database.close.assert_called_once()
     if script == "add_local_observations_to_db":
         env.ingestor.upsert_station.assert_awaited_once()
-        env.dem.data.close.assert_called_once()
+        env.close_dem.assert_called_once()
     else:
         env.ingestor.refresh_database.assert_awaited_once_with(
             persist_requested_end=True,
@@ -218,3 +226,16 @@ def test_local_sync_failure_stops_ingestion_and_closes_database(script_environme
     env.ingestor_factory.assert_not_called()
     env.ingestor.upsert_station.assert_not_awaited()
     env.database.close.assert_called_once()
+
+
+def test_local_invalid_dem_catalog_stops_before_sync(script_environment):
+    env = script_environment
+    path = Path(env.config['meteo_data']['station_catalog'])
+    path.write_text(path.read_text(encoding='utf-8').replace('46,11', '50,11'), encoding='utf-8')
+    module = env.prepare('add_local_observations_to_db')
+    with pytest.raises(ValueError, match='outside.*station-a'):
+        asyncio.run(module._main())
+    env.database.sync_catalog.assert_not_called()
+    env.ingestor.upsert_station.assert_not_awaited()
+    env.database.close.assert_called_once()
+    env.close_dem.assert_called_once()

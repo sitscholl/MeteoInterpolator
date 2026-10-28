@@ -7,7 +7,7 @@ from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, status as http_status
 from fastapi.responses import JSONResponse
 from pandas import Timedelta
 
@@ -102,7 +102,7 @@ async def handle_unexpected_error(
         exc_info=(type(exc), exc, exc.__traceback__),
     )
     return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": "Internal server error"},
     )
 
@@ -120,11 +120,11 @@ def get_station_from_database(request: Request, station_id: str | None = None, s
     stations = db.get_stations(station_id, include_inactive=True)
     
     if station_id is not None and not stations:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Station not found")
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Station not found")
 
     if status is not None:
         if status not in ['active', 'inactive']:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invalid status, choose one of 'active' or 'inactive'")
+            raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Invalid status, choose one of 'active' or 'inactive'")
         stations = [i for i in stations if i.status == status]
         
     return [
@@ -156,7 +156,7 @@ def get_jobs_overview(request: Request):
     ]
 
 
-@app.post("/api/refresh_database", response_model=DatabaseRefreshSubmission, status_code=status.HTTP_202_ACCEPTED)
+@app.post("/api/refresh_database", response_model=DatabaseRefreshSubmission, status_code=http_status.HTTP_202_ACCEPTED)
 async def submit_database_refresh(request: Request):
 
     now_dt = datetime.datetime.now(datetime.UTC)

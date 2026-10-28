@@ -55,6 +55,11 @@ class _FakeLoader:
 @pytest.fixture
 def database():
     db = InterpolationDB("sqlite:///:memory:")
+    db.sync_catalog(pd.DataFrame([{
+        'station_id': 'station-a', 'name': 'Catalog station',
+        'latitude': 46.0, 'longitude': 11.0, 'elevation': 1000.0,
+        'crs': 4326, 'status': 'active',
+    }]))
     yield db
     db.close()
 
@@ -191,7 +196,7 @@ def test_empty_sensors_skip_without_fetching_or_inserting(database, dem):
     result = asyncio.run(ingestor.upsert_station("station-a", dem, persist_requested_end=True))
     assert result.status == "skipped"
     assert loader.requests == []
-    assert not database.station_exists("station-a")
+    assert database.get_last_row("station-a") is None
     assert database.get_last_ingestion_task("station-a") is None
 
 
@@ -219,7 +224,7 @@ def test_invalid_frequency_fails_before_fetch_or_write(database, dem, source_fre
     ))
     assert result.status == "failed"
     assert loader.requests == []
-    assert not database.station_exists("station-a")
+    assert database.get_last_row("station-a") is None
 
 
 def test_utc_hour_boundaries_are_used_for_non_hour_offset(database, dem):
@@ -238,8 +243,9 @@ def test_utc_hour_boundaries_are_used_for_non_hour_offset(database, dem):
 
 
 def test_refresh_continues_after_discovery_failure_and_reuses_session(database):
-    for station_id in ["station-a", "station-b", "station-c"]:
-        database.add_station(station_id, 46, 11, 1000, crs=4326)
+    for station_id in ["station-b", "station-c"]:
+        database.add_station(station_id, 46, 11, 1000, crs=4326, status='active')
+    database.add_station('inactive-station', 46, 11, 1000, crs=4326, status='inactive')
     loader = _FakeLoader(_station())
     loader.sensor_codes = {
         "station-a": {"LT", "LF"},
@@ -265,7 +271,7 @@ def test_refresh_continues_after_discovery_failure_and_reuses_session(database):
             assert item.requested_end == pd.Timestamp("2026-01-02", tz="UTC")
 
 
-def test_data_failure_does_not_add_station(database, dem, monkeypatch):
+def test_data_failure_leaves_catalog_station_without_observations(database, dem, monkeypatch):
     loader = _FakeLoader(_station())
 
     async def fail(**kwargs):
@@ -277,7 +283,8 @@ def test_data_failure_does_not_add_station(database, dem, monkeypatch):
     ))
     assert result.status == "failed"
     assert "required request failed" in result.error
-    assert not database.station_exists("station-a")
+    assert database.station_exists("station-a")
+    assert database.get_last_row("station-a") is None
 
 
 @pytest.mark.parametrize("provide_dem", [False, True])
@@ -295,7 +302,7 @@ def test_missing_elevation_requires_dem(database, dem, provide_dem):
     else:
         assert result.status == "failed"
         assert "no elevation" in result.error
-        assert not database.station_exists("station-a")
+        assert database.get_last_row("station-a") is None
 
 
 def test_ingestion_requests_all_available_supported_sensors(database, dem):
@@ -372,15 +379,25 @@ def test_progress_insert_failure_rolls_back_measurement_inserts_and_updates(data
         assert session.scalars(select(models.IngestionRequest)).all() == []
 
 
-def test_explicit_start_and_metadata_update(database, dem):
-    database.add_station("station-a", 46, 11, 900, crs=4326)
+def test_explicit_start_preserves_catalog_metadata(database, dem):
+    database.update_station('station-a', only_missing=False, elevation=900)
     loader = _FakeLoader(_station())
     result = asyncio.run(MeteoIngestor(loader, database, MeteoResampler()).upsert_station(
         "station-a", dem, start=datetime(2025, 12, 31, tzinfo=UTC),
-        end=datetime(2026, 1, 2, tzinfo=UTC), update_station_metadata=True,
+        end=datetime(2026, 1, 2, tzinfo=UTC),
     ))
     assert result.status == "completed"
     assert loader.requests[0]["start"] == pd.Timestamp("2025-12-31", tz="UTC")
     stored = database.get_stations("station-a")[0]
-    assert stored.elevation == 1000.0
+    assert stored.elevation == 900.0
     assert stored.crs == 4326
+
+
+def test_ingestion_requires_catalog_station_before_fetching(database, dem):
+    loader = _FakeLoader(_station())
+    ingestor = MeteoIngestor(loader, database, MeteoResampler())
+    with pytest.raises(ValueError, match='does not exist'):
+        asyncio.run(ingestor.upsert_station('unknown', dem))
+    assert loader.enters == 0
+    assert loader.requests == []
+    assert not database.station_exists('unknown')

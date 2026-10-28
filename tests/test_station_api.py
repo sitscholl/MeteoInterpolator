@@ -27,25 +27,54 @@ def station_client(monkeypatch, tmp_path):
         database.close()
 
 
-def test_create_and_list_station_preserve_crs(station_client):
+def test_list_catalog_station_preserves_metadata(station_client):
     client, database = station_client
     payload = {
         "id": "station-1", "latitude": 46.0, "longitude": 11.0,
-        "elevation": 300.0, "crs": 4326, "name": "Test station",
+        "elevation": 300.0, "crs": 4326, "name": "Test station", "status": "active",
     }
-    response = client.post("/api/stations", json=payload)
-    assert response.status_code == 201
-    assert response.json() == payload
+    database.add_station(**payload)
     response = client.get("/api/stations", params={"station_id": "station-1"})
     assert response.status_code == 200
     assert response.json() == [payload]
     assert database.get_stations("station-1")[0].crs == 4326
 
 
-def test_station_creation_requires_crs(station_client):
+def test_station_creation_endpoint_is_disabled(station_client):
     client, database = station_client
     response = client.post("/api/stations", json={
         "id": "station-1", "latitude": 46.0, "longitude": 11.0, "elevation": 300.0,
     })
-    assert response.status_code == 422
+    assert response.status_code == 405
     assert not database.station_exists("station-1")
+
+
+@pytest.mark.parametrize('status,expected', [
+    (None, ['active-station', 'inactive-station']),
+    ('active', ['active-station']), ('inactive', ['inactive-station']),
+])
+def test_list_stations_filters_status(station_client, status, expected):
+    client, database = station_client
+    database.add_station('active-station', 46, 11, 1000, 4326, status='active')
+    database.add_station('inactive-station', 46, 11, 1000, 4326, status='inactive')
+    params = {} if status is None else {'status': status}
+    response = client.get('/api/stations', params=params)
+    assert response.status_code == 200
+    assert sorted(station['id'] for station in response.json()) == expected
+
+
+def test_inactive_station_is_available_by_id(station_client):
+    client, database = station_client
+    database.add_station('inactive-station', 46, 11, 1000, 4326, status='inactive')
+    response = client.get('/api/stations', params={'station_id': 'inactive-station'})
+    assert response.status_code == 200
+    assert response.json()[0]['status'] == 'inactive'
+
+
+@pytest.mark.parametrize('status', [None, 'active', 'inactive'])
+def test_unknown_station_returns_not_found(station_client, status):
+    client, _ = station_client
+    params = {'station_id': 'unknown'}
+    if status is not None:
+        params['status'] = status
+    assert client.get('/api/stations', params=params).status_code == 404
