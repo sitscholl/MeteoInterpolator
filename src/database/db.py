@@ -59,8 +59,20 @@ class InterpolationDB:
         finally:
             session.close()
 
-    def get_stations(self, id: str | None = None, include_inactive: bool = False) -> list[models.Station]:
-        with self.session_scope() as session:
+    def get_stations(
+        self, 
+        id: str | None = None, 
+        include_inactive: bool = False, 
+        db_session: Session | None = None
+        ) -> list[models.Station]:
+
+        transaction = (
+            self.Session.begin()
+            if db_session is None
+            else nullcontext(db_session)
+        )
+
+        with transaction as session:
             query = session.query(models.Station)
             if id is not None:
                 query = query.filter(models.Station.id == id)
@@ -117,9 +129,17 @@ class InterpolationDB:
                 )
             return query.first()
 
-    def station_exists(self, id: str):
-        existing_station = self.get_stations(id = id, include_inactive=True)
-        return len(existing_station) > 0
+    def station_exists(self, id: str, db_session: Session | None = None):
+        
+        transaction = (
+            self.Session.begin()
+            if db_session is None
+            else nullcontext(db_session)
+        )
+
+        with transaction as session:
+            existing_station = self.get_stations(id = id, include_inactive=True, db_session = session)
+            return len(existing_station) > 0
 
     def add_station(
         self, 
@@ -132,11 +152,6 @@ class InterpolationDB:
         name: str | None = None, 
         db_session: Session | None = None,
         ):
-        if self.station_exists(id):
-            raise StationAlreadyExistsError(
-                f"Station with id {id} already exists"
-            )
-
         if not isinstance(status, str):
             raise TypeError(f"Status must be of type string. Got {type(status)}")
         status = status.lower()
@@ -156,6 +171,10 @@ class InterpolationDB:
         )
 
         with transaction as session:
+            if self.station_exists(id, db_session = session):
+                raise StationAlreadyExistsError(
+                    f"Station with id {id} already exists"
+                )
             new_station = models.Station(
                 id = id, latitude = latitude, longitude = longitude, elevation = elevation, crs = crs, name = name, status = status
                 )
@@ -196,8 +215,14 @@ class InterpolationDB:
                     continue
                 if only_missing and getattr(station, key) is not None:
                     continue
+                
                 if key == 'crs':
                     value = validate_crs(value)
+                if key == 'status':
+                    value = value.lower()
+                    if value not in ['active', 'inactive']:
+                        raise ValueError(f"Invalid status {value}. Choose one of 'active' or 'inactive'")
+
                 setattr(station, key, value)
                 changed = True
 
@@ -211,12 +236,18 @@ class InterpolationDB:
 
     def sync_catalog(self, station_catalog: pd.DataFrame):
         catalog_ids = station_catalog.station_id.tolist()
-        inactive_ids = [i.id for i in self.get_stations() if i.id not in catalog_ids]
 
         with self.Session.begin() as db_session:
+
+            inactive_ids = [
+                station.id
+                for station in self.get_stations(db_session=db_session)
+                if station.id not in catalog_ids
+            ]
+
             for row in station_catalog.to_dict(orient="records"):
                 st_id = row.pop('station_id')
-                if self.station_exists(st_id):
+                if self.station_exists(st_id, db_session = db_session):
                     self.update_station(
                         id = st_id,
                         **row,
@@ -245,8 +276,6 @@ class InterpolationDB:
 
         if data.empty:
             raise ValueError("Empty dataframe provided to add_station_data")
-        if not self.station_exists(id):
-            raise ValueError(f"Cannot add data for station {id} because station does not exist in the database. Add station first.")
         if 'datetime' not in data.columns:
             raise ValueError("Missing column 'datetime' in data.")
 
@@ -308,6 +337,10 @@ class InterpolationDB:
 
         written_rows = 0
         with transaction as session:
+            
+            if not self.station_exists(id, db_session = session):
+                raise ValueError(f"Cannot add data for station {id} because station does not exist in the database. Add station first.")
+            
             for start in range(0, len(measurements), _BATCH_SIZE):
                 batch = measurements.iloc[start : start + _BATCH_SIZE]
                 session.execute(
