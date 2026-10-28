@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 import src.config as config_module
+from src.database.db import InterpolationDB
 
 
 @pytest.fixture
@@ -17,8 +18,15 @@ def script_environment(monkeypatch, tmp_path):
         folder = tmp_path / directory
         folder.mkdir()
         (folder / 'stations.csv').write_text('station_id\n', encoding='utf-8')
+    (tmp_path / 'catalog.csv').write_text(
+        'station_id,name,latitude,longitude,elevation,crs,status\n'
+        'station-a,Station A,46,11,1000,4326,ACTIVE\n'
+        'station-b,Station B,46,11,1000,4326,inactive\n',
+        encoding='utf-8',
+    )
     config = {
         "meteo_data": {
+            "station_catalog": "catalog.csv",
             "loader": {
                 "handler": "local_file",
                 "observations_path": "configured/*.csv",
@@ -35,6 +43,7 @@ def script_environment(monkeypatch, tmp_path):
         "dem": {"path": "configured-dem.tif"},
     }
     database = Mock()
+    database.get_last_row.return_value = None
     database_factory = Mock(return_value=database)
     monkeypatch.setattr(config_module, "InterpolationDB", database_factory)
     loader = SimpleNamespace(get_station_info=AsyncMock(return_value={"station-a": {}}))
@@ -89,7 +98,7 @@ def test_scripts_use_nested_config_and_explicit_path_overrides(script_environmen
         env.dem.data.close.assert_called_once()
     else:
         env.ingestor.refresh_database.assert_awaited_once_with(
-            update_station_metadata=False, persist_requested_end=True,
+            persist_requested_end=True,
         )
 
 
@@ -150,3 +159,62 @@ def test_refresh_rejects_path_overrides_for_remote_loader(script_environment):
     with pytest.raises(ValueError, match="require a local_file loader"):
         asyncio.run(module._main())
     env.database_factory.assert_not_called()
+
+
+def test_local_import_syncs_real_catalog_before_ingestion(script_environment, tmp_path):
+    env = script_environment
+    engine = f"sqlite:///{(tmp_path / 'catalog-sync.db').as_posix()}"
+    database = InterpolationDB(engine)
+    database.add_station('station-a', 46, 11, 900, 4326, status='inactive')
+    database.add_station('removed-station', 46, 11, 900, 4326, status='active')
+    env.database_factory.return_value = database
+    env.loader_factory.return_value.get_station_info.return_value = {
+        'station-a': {}, 'station-b': {}, 'unknown-station': {},
+    }
+
+    async def ingest(**kwargs):
+        assert kwargs['station_id'] == 'station-a'
+        statuses = {
+            station.id: station.status
+            for station in database.get_stations(include_inactive=True)
+        }
+        assert statuses == {
+            'station-a': 'active', 'station-b': 'inactive',
+            'removed-station': 'inactive',
+        }
+        return SimpleNamespace(status='completed')
+
+    env.ingestor.upsert_station.side_effect = ingest
+    module = env.prepare('add_local_observations_to_db')
+    asyncio.run(module._main())
+    env.ingestor.upsert_station.assert_awaited_once()
+
+    # Verify catalog synchronization committed, independently of ingestion.
+    reopened = InterpolationDB(engine)
+    try:
+        assert [station.id for station in reopened.get_stations()] == ['station-a']
+        assert len(reopened.get_stations(include_inactive=True)) == 3
+    finally:
+        reopened.close()
+
+
+@pytest.mark.parametrize('has_observations', [False, True])
+def test_local_skip_existing_checks_observations(script_environment, has_observations):
+    env = script_environment
+    env.database.get_last_row.return_value = object() if has_observations else None
+    module = env.prepare('add_local_observations_to_db', ['--skip_existing'])
+    asyncio.run(module._main())
+    env.database.sync_catalog.assert_called_once()
+    env.database.get_last_row.assert_called_once_with('station-a')
+    assert env.ingestor.upsert_station.await_count == (0 if has_observations else 1)
+
+
+def test_local_sync_failure_stops_ingestion_and_closes_database(script_environment):
+    env = script_environment
+    env.database.sync_catalog.side_effect = RuntimeError('sync failed')
+    module = env.prepare('add_local_observations_to_db')
+    with pytest.raises(RuntimeError, match='sync failed'):
+        asyncio.run(module._main())
+    env.ingestor_factory.assert_not_called()
+    env.ingestor.upsert_station.assert_not_awaited()
+    env.database.close.assert_called_once()
