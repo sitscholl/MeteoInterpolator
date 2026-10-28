@@ -58,7 +58,7 @@ _STATION_CATALOG_SCHEMA = pa.DataFrameSchema(
         'longitude': pa.Column(float, coerce=True, nullable=False, checks=pa.Check(lambda x: np.isfinite(x))),
         'elevation': pa.Column(float, coerce=True, nullable=False, checks=pa.Check(lambda x: np.isfinite(x) & x.between(0, 5000))),
         'crs': pa.Column(int, nullable=False, checks=pa.Check.equal_to(4326)),
-        'status': pa.Column(str, nullable=False, coerce=True, parsers=pa.Parser(lambda x: x.lower()), checks=pa.Check.isin(allowed_values=['active', 'inactive']))
+        'status': pa.Column(str, nullable=False, coerce=True, parsers=pa.Parser(lambda x: x.str.lower()), checks=pa.Check.isin(allowed_values=['active', 'inactive']))
     },
     strict = 'filter'
 )
