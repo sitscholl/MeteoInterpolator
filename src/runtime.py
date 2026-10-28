@@ -80,6 +80,11 @@ class CrossValidationConfig:
                 metric=self.select_by,
             )
 
+@dataclass(frozen=True)
+class InterpolationStatus:
+    enabled: bool
+    reason: str | None = None
+
 @dataclass
 class RuntimeContext:
     config: dict
@@ -97,7 +102,7 @@ class RuntimeContext:
         if self.config is None:
             raise ValueError("RuntimeContext requires a config dictionary")
 
-    def build_distance_fields(self) -> DistanceField:
+    def load_cached_distance_fields(self) -> DistanceField:
         if self.distance_calculator is None:
             raise ValueError("Distance fields required by configuration but no distance calculator provided")
 
@@ -112,7 +117,7 @@ class RuntimeContext:
             len(distance_catalog),
         )
 
-        return self.distance_calculator.calculate_fields(
+        return self.distance_calculator.load_cache(
             self.dem,
             x_coords,
             y_coords,
@@ -203,11 +208,16 @@ class RuntimeContext:
                     )
 
             ## Distance fields
-            self.distance_fields = None
             distance_fields_required = self.cross_validation.enabled or self.interpolator.residual_model is not None
+            self.distance_fields = None
             if distance_fields_required:
-                self.distance_fields = self.build_distance_fields()
+                if self.interpolator.residual_model is None:
+                    raise ValueError("Distance field required but no residual model available.")
 
+                self.distance_fields = self.load_cached_distance_fields()
+                if self.distance_fields is None:
+                    logger.warning("No cached distance fields available but required by configuration. Interpolation will be disabled")
+                    
             ## Grid Writer
             self.output_dir = Path('results')
             try:
@@ -216,6 +226,11 @@ class RuntimeContext:
                 logger.exception("Failed to initialize output directory")
                 raise
             
+            if distance_fields_required and self.distance_fields is None:
+                self.interpolation_status = InterpolationStatus(enabled = False, reason='No distance fields available.')
+            else:
+                self.interpolation_status = InterpolationStatus(enabled = True)
+
             self.initialized = True
 
         except Exception as e:

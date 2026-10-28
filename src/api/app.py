@@ -178,6 +178,12 @@ async def interpolate(
     freq: InterpolationFrequency = 'D',
     timezone: str = "Europe/Rome",
 ):
+    runtime = request.app.state.runtime
+
+    if not runtime.interpolation_status.enabled:
+        reason = runtime.interpolation_status.reason
+        raise HTTPException(status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Interpolation is not available, reason: {reason}")
+
     coordinator = request.app.state.coordinator
 
     interpolation_request = InterpolationRequest(param=param, start=start, end=end, timezone=timezone, freq=freq)

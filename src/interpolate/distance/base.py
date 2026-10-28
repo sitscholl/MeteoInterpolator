@@ -285,6 +285,16 @@ class BaseDistanceCalculator(ABC):
     ) -> DistanceField:
         ...
 
+    def load_cache(
+        self,
+        dem: DEM,
+        x_coords: Sequence[float],
+        y_coords: Sequence[float],
+        point_ids: Sequence[Hashable],
+    ) -> DistanceField:
+        distance_params = self._distance_cache_parameters(dem, x_coords, y_coords, point_ids)
+        return self._load_cache(distance_params)
+
     def calculate_fields(
         self,
         dem: DEM,
