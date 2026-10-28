@@ -1,13 +1,13 @@
 import logging
 from contextlib import contextmanager, nullcontext
-from datetime import UTC, datetime
+from datetime import datetime
 
 import pandas as pd
 from sqlalchemy import create_engine, event, func
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session, sessionmaker
 
-from ..utils import to_utc_timestamp, validate_station_coordinates, validate_crs
+from ..utils import to_utc_timestamp, validate_crs, validate_station_coordinates
 from . import models
 from .models import DATABASE_VARIABLES
 
@@ -59,11 +59,13 @@ class InterpolationDB:
         finally:
             session.close()
 
-    def get_stations(self, id: str | None = None) -> list[models.Station]:
+    def get_stations(self, id: str | None = None, include_inactive: bool = False) -> list[models.Station]:
         with self.session_scope() as session:
             query = session.query(models.Station)
             if id is not None:
                 query = query.filter(models.Station.id == id)
+            if not include_inactive:
+                query = query.filter(models.Station.status == 'active')
             return query.all()
 
     def get_data(
@@ -116,7 +118,7 @@ class InterpolationDB:
             return query.first()
 
     def station_exists(self, id: str):
-        existing_station = self.get_stations(id = id)
+        existing_station = self.get_stations(id = id, include_inactive=True)
         return len(existing_station) > 0
 
     def add_station(
@@ -126,13 +128,20 @@ class InterpolationDB:
         longitude: float, 
         elevation: float, 
         crs: int,
+        status: str,
         name: str | None = None, 
+        db_session: Session | None = None,
         ):
         if self.station_exists(id):
             raise StationAlreadyExistsError(
                 f"Station with id {id} already exists"
             )
 
+        if not isinstance(status, str):
+            raise TypeError(f"Status must be of type string. Got {type(status)}")
+        status = status.lower()
+        if status not in ['active', 'inactive']:
+            raise ValueError(f"Invalid status {status}. Choose one of 'active' or 'inactive'")
         latitude, longitude, elevation = validate_station_coordinates(
             latitude,
             longitude,
@@ -140,65 +149,88 @@ class InterpolationDB:
         )
         crs = validate_crs(crs)
 
-        session = self.Session()
-        try:
+        transaction = (
+            self.Session.begin()
+            if db_session is None
+            else nullcontext(db_session)
+        )
+
+        with transaction as session:
             new_station = models.Station(
-                id = id, latitude = latitude, longitude = longitude, elevation = elevation, crs = crs, name = name
+                id = id, latitude = latitude, longitude = longitude, elevation = elevation, crs = crs, name = name, status = status
                 )
             session.add(new_station)
-            session.commit()
+            session.flush()
             logger.info("New station with id %s inserted successfully.", id)
-            session.refresh(new_station)
             return new_station
-        except Exception as e:
-            session.rollback()
-            logger.exception("Error inserting new station with id %s", id)
-            raise
-        finally:
-            session.close()
 
     def update_station(
         self,
         id: str,
         only_missing: bool = True,
+        db_session: Session | None = None,
         **kwargs,
     ):
 
-        with self.session_scope() as session:
+        transaction = (
+            self.Session.begin()
+            if db_session is None
+            else nullcontext(db_session)
+        )
+
+        with transaction as session:
             stations = session.query(models.Station).filter(models.Station.id == id).all()
 
             if len(stations) == 0:
                 raise ValueError(f"No station with id {id} for exists.")
             station = stations[0]
 
-            allowed_fields = {"name", "latitude", "longitude", "elevation", "crs"}
+            allowed_fields = {"name", "latitude", "longitude", "elevation", "crs", "status"}
             invalid_fields = {k: v for k, v in kwargs.items() if k not in allowed_fields}
             if len(invalid_fields) > 0:
                 raise ValueError(f"Invalid fields in update_station: {invalid_fields.keys()}. Allowed fields: {allowed_fields}")
 
-            try:
-                changed = False
-                for key, value in kwargs.items():
-                    if value is None:
-                        continue
-                    if only_missing and getattr(station, key) is not None:
-                        continue
-                    if key == 'crs':
-                        value = validate_crs(value)
-                    setattr(station, key, value)
-                    changed = True
+            changed = False
+            for key, value in kwargs.items():
+                if value is None:
+                    continue
+                if only_missing and getattr(station, key) is not None:
+                    continue
+                if key == 'crs':
+                    value = validate_crs(value)
+                setattr(station, key, value)
+                changed = True
 
-                if changed:
-                    _ = validate_station_coordinates(station.latitude, station.longitude, station.elevation)
-                    _ = validate_crs(station.crs)
-                    session.commit()
-                    logger.info("Updated station metadata for station %s.", id)
-                    session.refresh(station)
-                return station
-            except Exception as e:
-                session.rollback()
-                logger.exception("Error updating station metadata for station %s", id)
-                raise
+            if changed:
+                _ = validate_station_coordinates(station.latitude, station.longitude, station.elevation)
+                _ = validate_crs(station.crs)
+                session.add(station)
+                session.flush()
+                logger.info("Updated station metadata for station %s.", id)
+            return station
+
+    def sync_catalog(self, station_catalog: pd.DataFrame):
+        catalog_ids = station_catalog.station_id.tolist()
+        inactive_ids = [i.id for i in self.get_stations() if i.id not in catalog_ids]
+
+        with self.Session.begin() as db_session:
+            for row in station_catalog.to_dict(orient="records"):
+                st_id = row.pop('station_id')
+                if self.station_exists(st_id):
+                    self.update_station(
+                        id = st_id,
+                        **row,
+                        only_missing = False,
+                        db_session=db_session
+                    )
+                else:
+                    self.add_station(
+                        id = st_id,
+                        **row,
+                        db_session=db_session
+                    )
+            for st_id in inactive_ids:
+                self.update_station(id = st_id, status = 'inactive', db_session=db_session, only_missing=False)
 
     def variable_exists(self, name: str):
         return name in DATABASE_VARIABLES

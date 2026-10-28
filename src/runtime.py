@@ -3,16 +3,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import geopandas as gpd
+import pandas as pd
 import yaml
 from pyproj import CRS
-from shapely.geometry import Point
 
 from .aoi import AOI
 from .array.cache import CacheManager
 from .config import MeteoDataConfig
 from .datagaps import Gapfiller
 from .domain.dem import load_dem
-from .domain.schemas import _OBSERVATION_POINTS_SCHEMA
+from .domain.schemas import _STATION_CATALOG_SCHEMA
 from .interpolate import BaseDistanceCalculator, DistanceField, Interpolator
 from .interpolate.cv import validate_cross_validation_options
 
@@ -27,6 +27,18 @@ def load_config_file(config_file: str | Path) -> dict:
         config = yaml.safe_load(f) or {}
 
     return config
+
+def open_station_catalog(file: str | Path):
+    file = Path(file)
+
+    if not file.exists():
+        raise ValueError(f"Cannot find station cataloge file at {file}. Please upload a valid csv file.")
+    if not file.suffix == '.csv':
+        raise ValueError(f"Cataloge file is not a csv file. Got {file}")
+
+    catalog = pd.read_csv(file, dtype={'station_id': str})
+    catalog = _STATION_CATALOG_SCHEMA.validate(catalog)
+    return catalog
 
 @dataclass(frozen=True)
 class CrossValidationConfig:
@@ -64,24 +76,19 @@ class RuntimeContext:
         if self.config is None:
             raise ValueError("RuntimeContext requires a config dictionary")
 
-    async def build_station_catalog(
-        self, configured_stations: str | list[str] | None, aoi: AOI, crs: CRS | str | int
+    def load_station_catalog(
+        self, file: str | Path, aoi: AOI, crs: CRS | str | int
         ):
-        async with self.meteo_loader as meteo_loader:
-            all_stations = await meteo_loader.get_station_info()
 
-        if configured_stations is None:
-            stations = all_stations
-        else:
-            if isinstance(configured_stations, str):
-                configured_stations = [configured_stations]
-            stations = {st: info for st, info in all_stations.items() if st in configured_stations}
+        full_catalog = open_station_catalog(file)
 
-        gdf_data = list(stations.values())
-        coords = [Point(i['x'], i['y']) for i in gdf_data]
-        station_gdf = gpd.GeoDataFrame(gdf_data, geometry = coords, crs = 4326)
+        coords = gpd.points_from_xy(
+            full_catalog["longitude"], full_catalog["latitude"]
+        )
+        station_gdf = gpd.GeoDataFrame(
+            full_catalog, geometry = coords, crs = 4326
+            )
         station_gdf = station_gdf.to_crs(crs)
-        station_gdf.rename(columns = {'id': 'station_id'}, inplace = True)
 
         stations_in_dem = aoi.filter_bbox(station_gdf)
 
@@ -89,19 +96,26 @@ class RuntimeContext:
             raise ValueError("No stations are within supplied dem.")
 
         dropped_stations = [i for i in station_gdf['station_id'].unique() if i not in stations_in_dem['station_id'].unique()]
-        if len(dropped_stations) > 0 and configured_stations is not None:
+        if len(dropped_stations) > 0:
             logger.warning(f"The following stations are ignored because they are outside the provided dem: {dropped_stations}")
-        
-        stations_in_dem = stations_in_dem.set_index("station_id", drop=False)
-        stations_in_dem = _OBSERVATION_POINTS_SCHEMA.validate(stations_in_dem)
 
         return stations_in_dem
+
+    def get_active_stations(self, station_id: str | None = None):
+        if not hasattr(self, 'station_catalog'):
+            raise ValueError("Station catalog has not been initialized. Cannot load active stations")
+        
+        if station_id is not None:
+            selected_stations = self.station_catalog.loc[self.station_catalog['station_id'] == station_id].copy()
+        else:
+            selected_stations = self.station_catalog.copy()
+        return selected_stations
 
     def build_distance_fields(self) -> DistanceField:
         if self.distance_calculator is None:
             raise ValueError("Distance fields required by configuration but no distance calculator provided")
 
-        station_catalog = self.station_catalog.sort_index().to_crs(
+        station_catalog = self.station_catalog.sort_values('station_id').to_crs(
             self.dem.crs
         )
         x_coords = station_catalog.geometry.x.astype(float).tolist()
@@ -116,7 +130,7 @@ class RuntimeContext:
             self.dem,
             x_coords,
             y_coords,
-            station_catalog.index,
+            station_catalog.station_id,
         )
 
     async def initialize_runtime(self, config: dict):
@@ -148,11 +162,10 @@ class RuntimeContext:
             logger.info('Initialized meteo loader.')
 
             ## Stations
-            configured_stations = self.meteo_data_config.configured_stations
-            self.station_catalog = await self.build_station_catalog(
-                configured_stations, aoi = self.aoi, crs = CRS.from_user_input(self.dem.crs)
+            self.station_catalog = self.load_station_catalog(
+                self.meteo_data_config.station_catalog, aoi = self.aoi, crs = CRS.from_user_input(self.dem.crs)
             )
-            self.station_ids = self.station_catalog.index.astype(str).tolist()
+            self.station_ids = self.station_catalog.station_id.tolist()
             logger.info("Initialized %s stations inside dem for interpolation", len(self.station_ids))
 
             ## Meteo resampler
@@ -162,6 +175,7 @@ class RuntimeContext:
             ## Database
             self.db = self.meteo_data_config.create_database_handler()
             logger.info("Initialized database connection at %s", self.db.engine)
+            self.db.sync_catalog(self.station_catalog.drop('geometry', axis = 1))
 
             ## Gapfiller
             gapfiller_config = config.get('gapfilling')

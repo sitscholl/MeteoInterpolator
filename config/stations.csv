@@ -1,0 +1,96 @@
+station_id,name,latitude,longitude,elevation,crs,status
+00390SF,Graun Schöneben,46.8064,10.4979,2040,4326,active
+00700WS,Graun Elferspitze,46.7767,10.4878,2926,4326,active
+01080SF,Melag Pratznerberg,46.8468,10.6247,2450,4326,active
+01110MS,Langtaufers Grub,46.8365,10.633,1842,4326,active
+02200MS,St. Valentin a.d. Haide,46.7759,10.5289,1499,4326,active
+02500MS,Marienberg,46.7057,10.5213,1310,4326,active
+02700SF,Schleis Kloangruebes,46.7004,10.4324,2460,4326,active
+03100MS,Taufers i.M.,46.6373,10.4615,1235,4326,active
+06040WS,Sulden Schöntaufspitze,46.5029,10.6286,3328,4326,active
+06090SF,Sulden Madritsch,46.4938,10.6144,2825,4326,active
+06400MS,Sulden,46.5159,10.5953,1907,4326,active
+07740WS,Trafoi Zaufenkofel,46.5556,10.5397,2475,4326,active
+08200MS,Laas Eyrs,46.6249,10.6496,874,4326,active
+09700MS,Schlanders,46.6238,10.7803,698,4326,active
+11400MS,Hintermartell,46.5169,10.7269,1720,4326,active
+15000SF,Schnals Teufelsegg,46.7847,10.7647,3035,4326,active
+15590SF,Schnals Finail,46.7412,10.8224,1950,4326,active
+15800MS,Schnals Vernagt,46.7357,10.8493,1700,4326,active
+19300MS,Naturns,46.6477,10.9912,541,4326,active
+20050SF,Timmelsalm,46.9136,11.1487,2230,4326,active
+20500MS,Pfelders,46.7965,11.0883,1640,4326,active
+20690SF,Pfelders Grünboden,46.792,11.1016,2015,4326,active
+20720WS,Pfelders Rauhjoch,46.8289,11.1146,2926,4326,active
+20910MS,Platt in Passeier,46.8215,11.1762,1145,4326,active
+22210MS,St. Martin in Passeier,46.7822,11.2294,588,4326,active
+23200MS,Meran,46.688,11.1366,330,4326,active
+24170WS,Ulten Weißbrunnspitz,46.494,10.774,3253,4326,active
+24300SF,Ulten Rossbänke,46.4693,10.8194,2255,4326,active
+24400MS,Ulten Weißbrunn,46.4868,10.8318,1900,4326,active
+25900MS,St. Walburg,46.5417,10.9898,1142,4326,active
+27100MS,Gargazon,46.5767,11.2008,254,4326,active
+31410MS,Pflersch,46.9557,11.3793,1154,4326,active
+31810SF,Ladurns,46.9348,11.3663,1960,4326,active
+33500MS,Pfitsch St. Jakob,46.9656,11.5981,1440,4326,active
+34200WS,Signalgipfel Wilder Freiger,46.9684,11.1929,3399,4326,active
+34500MS,Ridnaun,46.9091,11.3068,1364,4326,active
+35100WS,Jaufenkamm,46.8401,11.3184,2145,4326,active
+35205SF,Ratschings Wasserfaller Alm,46.8456,11.2987,1907,4326,active
+37100MS,Sterzing,46.885,11.4386,943,4326,active
+37700MS,Franzensfeste Grasstein,46.8125,11.5488,850,4326,active
+39100MS,Brixen - Vahrn,46.731,11.6451,585,4326,active
+41000MS,Toblach,46.7299,12.2191,1219,4326,active
+42700MS,St. Veit in Prags,46.7119,12.1,1285,4326,active
+42830SF,Prags Rossalm,46.6712,12.1115,2340,4326,active
+43200MS,Welsberg,46.7431,12.1289,1131,4326,active
+44500MS,St. Magdalena in Gsies,46.8353,12.2427,1412,4326,active
+45100WS,Gsies Regelspitze,46.8561,12.2005,2747,4326,active
+45200SF,Gsies Pfinnalm,46.8417,12.2096,2152,4326,active
+47400MS,Antholz Obertal,46.8704,12.1166,1320,4326,active
+50360SF,Prettau Merbalm,47.0362,12.1221,2006,4326,active
+50400WS,Prettau Lengspitze,47.0159,12.131,3105,4326,active
+50500MS,Prettau,47.0366,12.0991,1450,4326,active
+53200SF,Weissenbach Fadner Alm,46.9256,11.8614,2155,4326,active
+54500MS,Rein in Taufers,46.9428,12.0825,1562,4326,active
+56500MS,Mühlwald,46.8901,11.8744,1141,4326,active
+56900MS,Sand i.T. Mühlen,46.9003,11.9474,851,4326,active
+59700MS,Bruneck,46.8043,11.9315,828,4326,active
+61300MS,Corvara,46.5504,11.8733,1530,4326,active
+61690SF,Abtei Piz La Ila,46.565,11.9036,2050,4326,active
+61720WS,Abtei Piz Pisciadù,46.5314,11.825,2985,4326,active
+62270SF,Campill Kreuzkofeljoch,46.6377,11.8122,2297,4326,active
+62600MS,St. Martin in Thurn,46.6792,11.8979,1150,4326,active
+65350MS,Obervintl,46.8111,11.7534,746,4326,active
+65600MS,Terenten,46.8345,11.7856,1349,4326,active
+66000WS,Pfunders Dannelspitz,46.9434,11.6871,2808,4326,active
+66100SF,Pfunders Stutzenalm,46.9254,11.6882,2050,4326,active
+66500MS,Pfunders,46.8872,11.7029,1168,4326,active
+68600MS,Vals,46.8483,11.6272,1410,4326,active
+69900MS,Plose,46.6986,11.7338,2472,4326,active
+71510MS,Villnöss,46.6479,11.6894,1327,4326,active
+73500MS,Wolkenstein,46.5456,11.7684,1594,4326,active
+74200MS,Seiser Alm Zallinger,46.5119,11.6888,2055,4326,active
+74900MS,Barbian Kollmann,46.5951,11.5291,490,4326,active
+75600MS,Völs am Schlern,46.5134,11.506,840,4326,active
+78110MS,Karerpass,46.4092,11.6017,1715,4326,active
+78305MS,Welschnofen,46.4289,11.5366,1128,4326,active
+78480SF,Deutschnofen Obereggen,46.3636,11.5467,2125,4326,active
+79300MS,Ritten Siffian,46.529,11.4638,987,4326,active
+80100SF,Pens Tramintal,46.795,11.4774,2100,4326,active
+80300MS,Pens,46.78078,11.4166,1453,4326,active
+82200MS,Sarnthein,46.6406,11.3551,970,4326,active
+82500WS,Rittner Horn,46.6156,11.4604,2260,4326,active
+82910MS,Jenesien,46.5304,11.3319,970,4326,active
+83200MS,Bozen,46.4977,11.3128,245,4326,active
+85120MS,Deutschnofen,46.4205,11.4269,1470,4326,active
+85700MS,Branzoll,46.4065,11.3111,226,4326,active
+86600MS,Laimburg,46.3825,11.2887,224,4326,active
+86900MS,Auer,46.3469,11.305,250,4326,active
+87300MS,Radein,46.3465,11.3968,1551,4326,active
+88820MS,Salurn,46.2362,11.1855,212,4326,active
+89190MS,Kaltern Oberplanitzing,46.4423,11.2525,495,4326,active
+90005SF,Proveis Samerberg,46.4956,10.9987,2142,4326,active
+91180SF,Sexten Rotwandwiesen,46.6636,12.3704,1910,4326,active
+91210WS,Toblach Hochebenkofel,46.6802,12.2573,2906,4326,active
+91510MS,Sexten,46.6915,12.3577,1322,4326,active

@@ -50,6 +50,19 @@ def station_data_schema(timezone: str | None = None) -> pa.DataFrameSchema:
 
 _STATION_DATA_SCHEMA = station_data_schema()
 
+_STATION_CATALOG_SCHEMA = pa.DataFrameSchema(
+    columns = {
+        'station_id': pa.Column(str, coerce=True, nullable=False, unique = True),
+        'name': pa.Column(str, coerce=True, nullable=True),
+        'latitude': pa.Column(float, coerce=True, nullable=False, checks=pa.Check(lambda x: np.isfinite(x))),
+        'longitude': pa.Column(float, coerce=True, nullable=False, checks=pa.Check(lambda x: np.isfinite(x))),
+        'elevation': pa.Column(float, coerce=True, nullable=False, checks=pa.Check(lambda x: np.isfinite(x) & x.between(0, 5000))),
+        'crs': pa.Column(int, nullable=False, checks=pa.Check.equal_to(4326)),
+        'status': pa.Column(str, nullable=False, coerce=True, parsers=pa.Parser(lambda x: x.lower()), checks=pa.Check.isin(allowed_values=['active', 'inactive']))
+    },
+    strict = 'filter'
+)
+
 _OBSERVATION_POINTS_SCHEMA = pg.GeoDataFrameSchema(
         {
             "geometry": pg.Column("geometry", nullable=False, required=True),

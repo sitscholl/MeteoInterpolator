@@ -40,10 +40,8 @@ class StationRead(BaseModel):
     latitude: float
     elevation: float
     crs: int
+    status: Literal["active", "inactive"]
     name: str | None = None
-
-class StationCreate(StationRead):
-    pass
 
 class DatabaseRefreshSubmission(BaseModel):
     submitted_at: datetime

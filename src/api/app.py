@@ -12,7 +12,6 @@ from fastapi.responses import JSONResponse
 from pandas import Timedelta
 
 from ..coordinator import InterpolationCoordinator
-from ..database.db import StationAlreadyExistsError
 from ..jobs.database_refresh import run_database_refresh
 from ..runtime import RuntimeContext
 from .schemas import (
@@ -21,7 +20,6 @@ from .schemas import (
     InterpolationRequest,
     InterpolationSubmission,
     JobOverview,
-    StationCreate,
     StationRead,
 )
 
@@ -116,13 +114,18 @@ async def health_check():
     }
 
 @app.get("/api/stations", response_model=list[StationRead])
-def get_station_from_database(request: Request, station_id: str | None = None):
+def get_station_from_database(request: Request, station_id: str | None = None, status: str | None = None):
     
     db = request.app.state.runtime.db
-    stations = db.get_stations(station_id)
+    stations = db.get_stations(station_id, include_inactive=True)
     
     if station_id is not None and not stations:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Station not found")
+
+    if status is not None:
+        if status not in ['active', 'inactive']:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invalid status, choose one of 'active' or 'inactive'")
+        stations = [i for i in stations if i.status == status]
         
     return [
         StationRead(
@@ -132,37 +135,10 @@ def get_station_from_database(request: Request, station_id: str | None = None):
             elevation=station.elevation,
             crs=station.crs,
             name=station.name,
+            status=station.status
         )
         for station in stations
     ]
-
-@app.post("/api/stations", response_model = StationRead, status_code=status.HTTP_201_CREATED)
-def add_station_to_database(request: Request, station: StationCreate):
-
-    db = request.app.state.runtime.db
-
-    try:
-        new_station = db.add_station(**station.model_dump())
-    except StationAlreadyExistsError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A station with this ID already exists",
-        ) from exc
-    except ValueError as exc:
-        # add_station uses ValueError for coordinate validation.
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        ) from exc
-
-    return StationRead(
-        id=new_station.id,
-        latitude=new_station.latitude,
-        longitude=new_station.longitude,
-        elevation=new_station.elevation,
-        crs=station.crs,
-        name=new_station.name,
-    )
 
 @app.get("/api/jobs", response_model=list[JobOverview])
 def get_jobs_overview(request: Request):

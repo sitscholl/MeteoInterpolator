@@ -117,7 +117,6 @@ async def _main() -> None:
             refresh_result = await ingestor.upsert_station(
                 station_id = st_id,
                 dem = dem,
-                update_station_metadata = True,
             )
             results.append(refresh_result)
         

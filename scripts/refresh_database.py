@@ -89,7 +89,7 @@ async def _main() -> None:
             **ingestor_config,
         )
 
-        refresh_result = await ingestor.refresh_database(update_station_metadata=False, persist_requested_end=True)
+        refresh_result = await ingestor.refresh_database(persist_requested_end=True)
         if refresh_result.n_failed:
             logger.warning("Database refresh failed for %s stations; check logs", refresh_result.n_failed)
 

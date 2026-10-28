@@ -70,6 +70,7 @@ class DatabaseConfig(ConfigModel):
     engine: str = Field("sqlite:///db/database.db")
 
 class MeteoDataConfig(ConfigModel):
+    station_catalog: str
     loader: ProvinceLoaderConfig | LocalFileLoaderConfig = Field(discriminator="handler")
     scheduler: SchedulerConfig
     database_ingestion: IngestorConfig

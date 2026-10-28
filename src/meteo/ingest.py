@@ -172,13 +172,18 @@ class MeteoIngestor:
         dem: DEM | None = None,
         start: datetime | None = None,
         end: datetime | None = None,
-        update_station_metadata: bool = False,
         session: BaseMeteoHandler | None = None,
         persist_requested_end: bool = False,
     ) -> StationIngestResult:
 
         requested_start = None
         requested_end = None
+
+        if not self.database.station_exists(station_id):
+            raise ValueError(f"Cannot upsert station because station {station_id} does not exist in the database. Add a new station by modifying the station catalog file and restarting the application.")
+        if self.database.get_stations(station_id)[0].status == 'inactive':
+            logger.warning("Requesting data for inactive station %s", station_id)
+        
         try:
             context = (
                 self.loader
@@ -233,15 +238,6 @@ class MeteoIngestor:
             if dem is not None:
                 station = self._update_elevation(station, dem, overwrite=False)
             _ = validate_station_coordinates(station.y, station.x, station.elevation)
-
-            if not self.database.station_exists(station_id):
-                self.database.add_station(
-                    id = station.id, latitude = station.y, longitude = station.x, elevation = station.elevation, crs = station.crs, name = station.name
-                )
-            elif update_station_metadata:
-                self.database.update_station(
-                    id = station.id, latitude = station.y, longitude = station.x, elevation = station.elevation, crs = station.crs, name = station.name, only_missing = False
-                )
 
             if station.data is None:
                 logger.warning("No data found for station %s. Skipping database insertion", station_id)
@@ -301,10 +297,9 @@ class MeteoIngestor:
     async def refresh_database(
         self,
         end: datetime | None = None,
-        update_station_metadata: bool = False,
         persist_requested_end: bool = False,
     ):
-        ##Query station_ids and sensor_codes from database and refresh them all
+        ##Refresh all active stations
         requested_end = self._validate_end(end)     
         database_stations = self.database.get_stations()
         
@@ -335,7 +330,6 @@ class MeteoIngestor:
                         station.id, 
                         start = last_refresh_end,
                         end = requested_end, 
-                        update_station_metadata=update_station_metadata, 
                         session = meteo_loader,
                         persist_requested_end=persist_requested_end
                     )
