@@ -15,9 +15,6 @@ meteo_data:
 
   resampling:
     min_coverage: 0.7
-    
-  database:
-    engine: sqlite:///db/database.db
 
 dem:
   #path: "https://files.isimip.org/ISIMIP3a/InputData/climate/atmosphere/obsclim/global/daily/historical/CHELSA-W5E5/chelsa-w5e5_obsclim_orog_30arcsec_global.nc#mode=bytes"
