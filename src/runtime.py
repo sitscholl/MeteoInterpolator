@@ -168,19 +168,15 @@ class RuntimeContext:
             logger.info("Initialized database connection at %s", self.db.engine)
             self.db.sync_catalog(self.station_catalog.drop('geometry', axis = 1))
 
-            ## Gapfiller
-            gapfiller_config = config.get('gapfilling')
-            self.gapfiller = Gapfiller(**gapfiller_config) if gapfiller_config is not None else None
-            if gapfiller_config is None:
-                logger.info('No gapfiller configuration provided. Gaps will not be filled')
-            else:
-                logger.info("Gapfiller initialized")
+            ## Interpolator
+            interpolation_config = config['interpolation']
+            self.interpolator = Interpolator.from_config(interpolation_config)
 
             ##Distance Calculator
-            interpolation_config = config['interpolation']
-
-            distance_config = interpolation_config.get('distance')
+            distance_config = config.get('distance')
             if distance_config is None:
+                if self.interpolator.requires_distances:
+                    raise ValueError("Interpolator requires distances but no distance calculator configured.")
                 self.distance_calculator = None
             else:
                 distance_config = dict(distance_config)
@@ -190,9 +186,6 @@ class RuntimeContext:
                     cache_manager=self.cache_manager,
                     **distance_config,
                 )
-
-            ## Interpolator
-            self.interpolator = Interpolator.from_config(interpolation_config)
 
             ## Cross Validation
             self.cross_validation = CrossValidationConfig(**config.get("cross_validation", {}))
@@ -208,7 +201,7 @@ class RuntimeContext:
                     )
 
             ## Distance fields
-            distance_fields_required = self.cross_validation.enabled or self.interpolator.residual_model is not None
+            distance_fields_required = self.cross_validation.enabled or self.interpolator.requires_distances
             self.distance_fields = None
             if distance_fields_required:
                 if self.interpolator.residual_model is None:
@@ -218,13 +211,21 @@ class RuntimeContext:
                 if self.distance_fields is None:
                     logger.warning("No cached distance fields available but required by configuration. Interpolation will be disabled")
                     
-            ## Grid Writer
+            ## outpout directory
             self.output_dir = Path('results')
             try:
                 self.output_dir.mkdir(exist_ok = True, parents=True)
             except Exception as e:
                 logger.exception("Failed to initialize output directory")
                 raise
+
+            ## Gapfiller
+            gapfiller_config = config.get('gapfilling')
+            self.gapfiller = Gapfiller(**gapfiller_config) if gapfiller_config is not None else None
+            if gapfiller_config is None:
+                logger.info('No gapfiller configuration provided. Gaps will not be filled')
+            else:
+                logger.info("Gapfiller initialized")
             
             if distance_fields_required and self.distance_fields is None:
                 self.interpolation_status = InterpolationStatus(enabled = False, reason='No distance fields available.')

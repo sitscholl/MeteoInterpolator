@@ -131,12 +131,15 @@ class Interpolator:
         vertical_handler = vertical_config.pop("type")
         vertical_model = BaseVerticalModel.create(vertical_handler, **vertical_config)
 
-        idw_config = config.get('inverse_distance_weighting')
-        if idw_config is None:
+        residual_config = config.get('residual_model')
+        if residual_config is None:
             residual_model = None
         else:
-            idw_config = dict(idw_config)
-            residual_model = InverseDistanceWeighting(**idw_config)
+            residual_config = dict(residual_config)
+            residual_handler = residual_config.pop('type')
+            if residual_handler != 'inverse_distance_weighting':
+                raise NotImplementedError("Only inverse_distance_weighting is currently supported for the residual model type")
+            residual_model = InverseDistanceWeighting(**residual_config)
 
         ## Interpolation Regions
         region_config = config.get('interpolation_regions')
@@ -152,6 +155,10 @@ class Interpolator:
             regions = interpolation_regions, 
             min_sample_size = min_sample_size
             )
+
+    @property
+    def requires_distances(self):
+        return self.residual_model is not None
 
     @staticmethod
     def _select_distance_field(
