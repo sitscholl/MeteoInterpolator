@@ -243,7 +243,11 @@ class MeteoIngestor:
                 logger.warning("No data found for station %s. Skipping database insertion", station_id)
                 if persist_requested_end:
                     self.database.log_ingestion_task(
-                        station_id = station.id, requested_start = requested_start, requested_end = requested_end, status = "completed",
+                        station_id = station.id, 
+                        requested_start = requested_start, 
+                        requested_end = requested_end, 
+                        status = "completed",
+                        written_rows = 0,
                     )
                 return StationIngestResult(
                         station_id = station_id,
@@ -270,6 +274,7 @@ class MeteoIngestor:
                         requested_start = requested_start, 
                         requested_end = requested_end, 
                         status = "completed",
+                        written_rows = written_rows,
                         db_session=db_session
                     )
                 logger.debug("Upserted %s rows to database for station %s", written_rows, station.id)
@@ -307,13 +312,14 @@ class MeteoIngestor:
         async with self.loader as meteo_loader:
             for station in database_stations:
                 try:
-                
-                    last_refresh_task = self.database.get_last_ingestion_task(station.id)
-                    if last_refresh_task is not None:
-                        last_refresh_end = to_utc_timestamp(last_refresh_task.requested_end)
-                        last_refresh_end = last_refresh_end - pd.Timedelta(days=self.overlap_days)
-                    else:
-                        last_refresh_end = None
+                    ###Keep last_refresh_end fixed to None for now. This queries data starting from
+                    ###the last observed timestamp in the database for each station and therefore
+                    ###avoids building up station gaps. 
+                    last_refresh_end = None
+                    # last_refresh_task = self.database.get_last_ingestion_task(station.id)
+                    # if last_refresh_task is not None:
+                    #     last_refresh_end = to_utc_timestamp(last_refresh_task.requested_end)
+                    #     last_refresh_end = last_refresh_end - pd.Timedelta(days=self.overlap_days)
 
                 except Exception as e:
                     logger.exception(f"Database refresh failed for station {station.id}")
