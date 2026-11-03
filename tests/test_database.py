@@ -1,6 +1,7 @@
 import math
 from datetime import UTC, datetime
 
+import numpy as np
 import pandas as pd
 import pytest
 from sqlalchemy import insert
@@ -17,6 +18,49 @@ def database():
     db = InterpolationDB("sqlite:///:memory:")
     yield db
     db.close()
+
+
+@pytest.mark.parametrize(
+    "written_rows", [0, 1, 17, np.int32(2), np.int64(3), np.uint64(4)]
+)
+def test_log_ingestion_task_persists_nonnegative_integer_counts(database, written_rows):
+    database.add_station("station-1", 46, 11, 300, crs=4326, status="active")
+
+    database.log_ingestion_task(
+        "station-1",
+        datetime(2026, 1, 1, tzinfo=UTC),
+        datetime(2026, 1, 2, tzinfo=UTC),
+        status="completed",
+        written_rows=written_rows,
+    )
+
+    stored = database.get_last_ingestion_task("station-1")
+    assert stored.written_rows == int(written_rows)
+    assert type(stored.written_rows) is int
+
+
+@pytest.mark.parametrize(
+    "written_rows",
+    [
+        None, -1, np.int64(-1), 1.5, 1.0, math.nan, math.inf, -math.inf,
+        True, False, np.bool_(True), "1", [], {}, 1 + 0j,
+    ],
+)
+def test_log_ingestion_task_rejects_invalid_counts_without_logging(
+    database, written_rows
+):
+    database.add_station("station-1", 46, 11, 300, crs=4326, status="active")
+
+    with pytest.raises(ValueError, match="Invalid row count"):
+        database.log_ingestion_task(
+            "station-1",
+            datetime(2026, 1, 1, tzinfo=UTC),
+            datetime(2026, 1, 2, tzinfo=UTC),
+            status="completed",
+            written_rows=written_rows,
+        )
+
+    assert database.get_last_ingestion_task("station-1") is None
 
 
 @pytest.mark.parametrize(

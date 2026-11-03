@@ -203,12 +203,18 @@ def test_empty_sensors_skip_without_fetching_or_inserting(database, dem):
 def test_insufficient_coverage_preserves_existing_values(database, dem):
     loader = _FakeLoader(_station())
     ingestor = MeteoIngestor(loader, database, MeteoResampler())
-    kwargs = dict(end=datetime(2026, 1, 2, tzinfo=UTC))
+    kwargs = dict(end=datetime(2026, 1, 2, tzinfo=UTC), persist_requested_end=True)
     assert asyncio.run(ingestor.upsert_station("station-a", dem, **kwargs)).observations_written == 1
+    assert database.get_last_ingestion_task("station-a").written_rows == 1
     loader.station.data = loader.station.data.iloc[:2].copy()
     result = asyncio.run(ingestor.upsert_station("station-a", dem, **kwargs))
     assert result.status == "completed"
     assert result.observations_written == 0
+    with database.Session() as session:
+        requests = session.scalars(
+            select(models.IngestionRequest).order_by(models.IngestionRequest.id)
+        ).all()
+        assert [request.written_rows for request in requests] == [1, 0]
     stored = database.get_data("station-a", pd.Timestamp("2026-01-01", tz="UTC"))
     assert stored["tair_2m"].tolist() == [6.0]
     assert stored["tair_2m_min"].tolist() == [1.0]
@@ -325,7 +331,9 @@ def test_ingestion_requests_all_available_supported_sensors(database, dem):
 
 
 @pytest.mark.parametrize("empty_response", [False, True])
-def test_refresh_uses_persisted_end_and_overlap_even_with_no_observations(database, dem, empty_response):
+def test_refresh_uses_observations_despite_advancing_request_history(
+    database, dem, empty_response
+):
     station = _station()
     if empty_response:
         station.data = None
@@ -338,12 +346,62 @@ def test_refresh_uses_persisted_end_and_overlap_even_with_no_observations(databa
     assert first.status == "completed"
     assert first.observations_written == (0 if empty_response else 1)
     assert database.get_last_ingestion_task(station.id).requested_end == datetime(2026, 1, 10)
-    second = asyncio.run(ingestor.refresh_database(
-        end=datetime(2026, 1, 11, tzinfo=UTC), persist_requested_end=True,
+    assert database.get_last_ingestion_task(station.id).written_rows == first.observations_written
+    expected_start = pd.Timestamp(
+        "2020-01-01" if empty_response else "2025-12-30", tz="UTC"
+    )
+    for day in [11, 12]:
+        refreshed = asyncio.run(ingestor.refresh_database(
+            end=datetime(2026, 1, day, tzinfo=UTC), persist_requested_end=True,
+        ))
+        assert refreshed.n_completed == 1
+        assert refreshed.written_rows == (0 if empty_response else 1)
+        assert loader.requests[-1]["start"] == expected_start
+        task = database.get_last_ingestion_task(station.id)
+        assert task.requested_end == datetime(2026, 1, day)
+        assert task.written_rows == refreshed.written_rows
+    with database.Session() as session:
+        measurements = session.scalars(select(models.Measurement)).all()
+        assert len(measurements) == (0 if empty_response else 1)
+
+
+def test_refresh_keeps_outage_start_until_observations_resume(database):
+    station = _station()
+    loader = _FakeLoader(station)
+    ingestor = MeteoIngestor(loader, database, MeteoResampler(), overlap_days=2)
+    original_data = station.data.copy()
+    assert asyncio.run(ingestor.upsert_station(
+        station.id, end=datetime(2026, 1, 10, tzinfo=UTC), persist_requested_end=True,
+    )).observations_written == 1
+
+    station.data = None
+    for day in [11, 12]:
+        refreshed = asyncio.run(ingestor.refresh_database(
+            end=datetime(2026, 1, day, tzinfo=UTC), persist_requested_end=True,
+        ))
+        assert refreshed.n_completed == 1
+        assert refreshed.written_rows == 0
+        assert loader.requests[-1]["start"] == pd.Timestamp("2025-12-30", tz="UTC")
+        assert database.get_last_ingestion_task(station.id).written_rows == 0
+
+    station.data = original_data.copy()
+    station.data["datetime"] += pd.Timedelta(days=4)
+    recovered = asyncio.run(ingestor.refresh_database(
+        end=datetime(2026, 1, 13, tzinfo=UTC), persist_requested_end=True,
     ))
-    assert second.n_completed == 1
-    assert loader.requests[1]["start"] == pd.Timestamp("2026-01-08", tz="UTC")
-    assert database.get_last_ingestion_task(station.id).requested_end == datetime(2026, 1, 11)
+    assert recovered.n_completed == 1
+    assert recovered.written_rows == 1
+    assert loader.requests[-1]["start"] == pd.Timestamp("2025-12-30", tz="UTC")
+    assert database.get_last_row(station.id).datetime == datetime(2026, 1, 5)
+    assert database.get_last_ingestion_task(station.id).written_rows == 1
+
+    assert asyncio.run(ingestor.refresh_database(
+        end=datetime(2026, 1, 14, tzinfo=UTC), persist_requested_end=True,
+    )).n_completed == 1
+    assert loader.requests[-1]["start"] == pd.Timestamp("2026-01-03", tz="UTC")
+    with database.Session() as session:
+        measurements = session.scalars(select(models.Measurement)).all()
+        assert len(measurements) == 2
 
 
 def test_progress_insert_failure_rolls_back_measurement_inserts_and_updates(database, dem):
