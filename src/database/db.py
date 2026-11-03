@@ -1,6 +1,7 @@
 import logging
 from contextlib import contextmanager, nullcontext
 from datetime import datetime
+from numbers import Integral
 
 import pandas as pd
 from sqlalchemy import create_engine, event, func
@@ -352,11 +353,26 @@ class InterpolationDB:
         return written_rows
 
     def log_ingestion_task(
-        self, station_id: str, requested_start: datetime, requested_end: datetime, status: str, db_session: Session | None = None
+        self,
+        station_id: str,
+        requested_start: datetime,
+        requested_end: datetime,
+        status: str,
+        written_rows: int,
+        db_session: Session | None = None
     ):
 
         if status not in {'completed', 'skipped', 'failed'}:
             raise ValueError(f"Invalid status {status}")
+
+        if (
+            isinstance(written_rows, bool)
+            or not isinstance(written_rows, Integral)
+            or written_rows < 0
+        ):
+            raise ValueError(f"Invalid row count {written_rows}")
+        # Normalize NumPy integer scalars so SQLite stores an INTEGER, not a BLOB.
+        written_rows = int(written_rows)
 
         requested_start = to_utc_timestamp(requested_start)
         requested_end = to_utc_timestamp(requested_end)
@@ -378,6 +394,7 @@ class InterpolationDB:
                 requested_start=requested_start,
                 requested_end=requested_end,
                 status=status,
+                written_rows=written_rows
             )
             session.add(entry)
             session.flush()

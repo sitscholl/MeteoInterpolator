@@ -68,6 +68,7 @@ class IngestionRequest(Base):
     requested_start = Column(DateTime(timezone=True), nullable = False)
     requested_end = Column(DateTime(timezone=True), nullable = False)
     status = Column(String, nullable = False)
+    written_rows = Column(Integer, nullable = True)
     station_id = Column(String, ForeignKey("stations.id", onupdate="CASCADE", ondelete='CASCADE'), nullable=False)
 
     station = relationship("Station", back_populates="ingestion_requests")
