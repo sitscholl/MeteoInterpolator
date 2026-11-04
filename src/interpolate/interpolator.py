@@ -14,9 +14,6 @@ from .models import InterpolationModel, FittedInterpolationModel
 
 logger = logging.getLogger(__name__)
 
-##TODO: Move naming of prediction, vertical_prediction and residual prediction dataarrays into InterpolationJob results and out of Interpolator methods
-##TODO: Remove pd.Series support from InterpolationJob and store only xarray arrays
-
 _REQUIRED_COLUMNS = ['elevation', 'x', 'y', 'station_id']
 
 @dataclass(frozen=True)
@@ -117,6 +114,22 @@ class InterpolationPrediction:
             "max": float(np.max(values)),
         }
 
+def _point_distances(
+    selected_distances: xr.DataArray,
+    targets: xr.Dataset,
+) -> xr.DataArray:
+    """Sample a raster at point targets, retaining requested point locations."""
+    field = DistanceField(selected_distances.attrs.get("distance_type", "distance"), selected_distances)
+    point_distances = field.to_points(
+        targets.target_id.values, targets.x.values, targets.y.values,
+    )
+    # Nearest-cell sampling leaves raster cell coordinates in x/y. Associate
+    # those sampled distances with the requested station coordinates for predict.
+    return point_distances.assign_coords(
+        x=point_distances.coords["target_x"],
+        y=point_distances.coords["target_y"],
+    )
+
 @dataclass
 class Interpolator:
     primary_model: InterpolationModel
@@ -175,11 +188,11 @@ class Interpolator:
 
         if "lam_value" in distance_data.dims:
             if lam_value is not None:
-                return distance_data.sel(lam_value=lam_value, drop = True)
+                return distance_data.sel(lam_value=lam_value)
             
             if distance_data.sizes['lam_value'] > 1:
                 raise ValueError("Distance fields contain multiple lambda values but no value for selection provided.")
-
+            return distance_data.isel(lam_value=0)
         return distance_data
 
     @staticmethod
@@ -217,10 +230,11 @@ class Interpolator:
         if self.requires_distances and distance_fields is None:
             raise ValueError('Interpolation requires distance fields but none are provided')
         if not isinstance(job, InterpolationJob):
-            raise TypeError(f"Interpolator.fit requires an InterpolationJob. Got {type(job)}")
+            raise TypeError(f"Interpolator.run requires an InterpolationJob. Got {type(job)}")
         if not isinstance(targets, xr.Dataset):
             raise TypeError(f"target_points must be  an xarray Dataset. Got {type(targets)}")
         self._check_prediction_crs(job, targets)
+        FittedInterpolationModel._validate_targets(targets)
 
         X, y = job.to_arrays()
 
@@ -230,24 +244,29 @@ class Interpolator:
                 f"are available and {self.min_sample_size} are required."
             )
 
-        #Get distance field with correct lam-value
-        if distance_fields is not None:
-            training_distances = self._select_distance_field(distance_fields, lam_value=lam_value)
-        else:
-            training_distances = None
+        # Select one raster field, then prepare each set of destinations.
+        selected_distances = target_distances = station_distances = None
+        training_targets = X.rename(id="target_id")
+        if self.requires_distances:
+            selected_distances = self._select_distance_field(distance_fields, lam_value=lam_value)
+            target_distances = (
+                _point_distances(selected_distances, targets)
+                if "target_id" in targets.dims else selected_distances
+            )
+            if self.primary_model.requires_distances:
+                station_distances = _point_distances(selected_distances, training_targets)
 
-        if training_distances is not None and "lam_value" in training_distances.coords:
-            lam_value = training_distances.lam_value.values.item()
+        if selected_distances is not None and "lam_value" in selected_distances.coords:
+            lam_value = selected_distances.lam_value.values.item()
 
         #Fit primary model
         primary_fit = self.primary_model.fit(X, y)
-        primary_prediction = primary_fit.predict(targets, distances=training_distances)
+        primary_prediction = primary_fit.predict(targets, distances=target_distances)
 
         ## Calculate residuals
-        training_targets = X.rename(id="target_id")
         station_prediction = primary_fit.predict(
             training_targets,
-            distances=training_distances,
+            distances=station_distances,
         )
         station_prediction = station_prediction.rename(target_id="id")
         station_prediction = station_prediction.sel(id=y.id)
@@ -260,7 +279,7 @@ class Interpolator:
 
             # Fit residual model and predict
             residual_fit = self.residual_model.fit(X = X, y=residuals)
-            residual_prediction = residual_fit.predict(targets = targets, distances=training_distances)
+            residual_prediction = residual_fit.predict(targets = targets, distances=target_distances)
 
             if residual_prediction is not None:
                 prediction = primary_prediction + residual_prediction
