@@ -9,9 +9,9 @@ import xarray as xr
 from pyproj import CRS
 
 from .distance import DistanceField
-from .idw import InverseDistanceWeighting
+from .models.idw import InverseDistanceWeighting
 from .regions import InterpolationRegions
-from .vertical import BaseFittedVerticalModel, BaseVerticalModel
+from .models import InterpolationModel, FittedInterpolationModel
 
 logger = logging.getLogger(__name__)
 

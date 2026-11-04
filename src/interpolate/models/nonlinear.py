@@ -1,12 +1,13 @@
+import logging
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+
 import numpy as np
+import xarray as xr
 from scipy.optimize import curve_fit
 
-import logging
-from dataclasses import dataclass
-from collections.abc import Mapping, Sequence
-
-from .base import BaseFittedVerticalModel, BaseVerticalModel
-from .linear import LinearVerticalModel
+from .base import FittedInterpolationModel, InterpolationModel
+from .linear import LinearLapseRateModel
 
 logger = logging.getLogger(__name__)
 
@@ -36,21 +37,67 @@ class NonLinearProfileParams:
             return cls.from_array(values)
         raise TypeError(f"Invalid nonlinear profile parameters: {type(values)}")
 
+def _calculate_nonlinear_profile(elevation, t0, gamma, a, h0, h1):
+    elevation = np.asarray(elevation, dtype=float)
+    denominator = h1 - h0
+    if np.isclose(denominator, 0.0):
+        denominator = np.finfo(float).eps
+
+    above = elevation >= h1
+    transition = (elevation < h1) & (elevation > h0)
+    below = elevation <= h0
+
+    return (
+        (t0 - gamma * elevation) * above
+        + (
+            t0
+            - gamma * elevation
+            - (a / 2) * (1 + np.cos(np.pi * (elevation - h0) / denominator))
+        )
+        * transition
+        + (t0 - gamma * elevation - a) * below
+    )
+
 @dataclass(frozen=True)
-class NonLinearVerticalFit(BaseFittedVerticalModel):
+class FittedNonLinearLapseRateModel(FittedInterpolationModel):
     parameters: NonLinearProfileParams
 
-    def _predict_numpy_2d(self, X):
-        return NonLinearVerticalModel._calculate_nonlinear_profile(
-            X,
+    def _predict(self, targets: xr.Dataset, distances=None):
+        if not isinstance(targets, xr.Dataset):
+            raise TypeError(f"X must be an xarray Dataset. Got {type(targets)}")
+        if not 'elevation' in targets.data_vars:
+            raise ValueError(f"LinearLapseRateModel Targets require a variable called 'elevation'. Got {targets.data_vars}")
+        
+        X = np.asarray(targets['elevation'].values)
+        original_shape = X.shape
+        X_2d = X.reshape(-1, 1)
+
+        preds = _calculate_nonlinear_profile(
+            X_2d,
             self.parameters.t0,
             self.parameters.gamma,
             self.parameters.a,
             self.parameters.h0,
             self.parameters.h1,
         )
+        preds = preds.reshape(original_shape)
 
-class NonLinearVerticalModel(BaseVerticalModel):
+        return xr.DataArray(
+            data=preds,
+            coords=targets.coords,
+            dims=targets.dims,
+            name="NonLinearLapseRate predictions",
+            attrs={
+                "description": "Non linear lapse rate predictions.",
+                "t0": self.parameters.t0,
+                "gamma": self.parameters.gamma,
+                "a": self.parameters.a,
+                "h0": self.parameters.h0,
+                "h1": self.parameters.h1,
+            },
+        )
+
+class NonLinearLapseRateModel(InterpolationModel):
     def __init__(
         self,
         fit_method: str = "trf",
@@ -67,29 +114,7 @@ class NonLinearVerticalModel(BaseVerticalModel):
 
     @classmethod
     def key(cls):
-        return "nonlinear"
-
-    @staticmethod
-    def _calculate_nonlinear_profile(elevation, t0, gamma, a, h0, h1):
-        elevation = np.asarray(elevation, dtype=float)
-        denominator = h1 - h0
-        if np.isclose(denominator, 0.0):
-            denominator = np.finfo(float).eps
-
-        above = elevation >= h1
-        transition = (elevation < h1) & (elevation > h0)
-        below = elevation <= h0
-
-        return (
-            (t0 - gamma * elevation) * above
-            + (
-                t0
-                - gamma * elevation
-                - (a / 2) * (1 + np.cos(np.pi * (elevation - h0) / denominator))
-            )
-            * transition
-            + (t0 - gamma * elevation - a) * below
-        )
+        return "nonlinear lapse rate model"
 
     def _get_initial_params(self, X, y):
         if self.initial_parameters is not None:
@@ -115,13 +140,15 @@ class NonLinearVerticalModel(BaseVerticalModel):
             fit_X = X
             fit_y = y
 
-        linear_fit = LinearVerticalModel().fit(fit_X.reshape(-1, 1), fit_y)
+        linear_fit = LinearLapseRateModel().fit(fit_X.reshape(-1, 1), fit_y)
         t0 = float(linear_fit.intercept)
         gamma = float(-linear_fit.coef[0])
         return NonLinearProfileParams(t0, gamma, 0.0, 500.0, 1500.0)
 
-    def fit(self, X, y):
-        X = np.asarray(X, dtype=float).reshape(-1)
+    def fit(self, X: xr.Dataset, y: xr.DataArray):
+        X, y = self._validate_training_data(X, y, required_predictors=('elevation',))
+
+        X = np.asarray(X['elevation'], dtype=float).reshape(-1)
         y = np.asarray(y, dtype=float).reshape(-1)
 
         if X.shape[0] != y.shape[0]:
@@ -134,14 +161,14 @@ class NonLinearVerticalModel(BaseVerticalModel):
             y = y[valid]
 
         if X.size < 5:
-            raise ValueError(f"Nonlinear vertical model requires at least five valid samples. Got {X.size}.")
+            raise ValueError(f"Nonlinear lapse-rate model requires at least five valid samples. Got {X.size}.")
 
         params = self._get_initial_params(X, y)
         sigma = np.ones_like(y)
 
         ##todo: Handle failed fit. Raise error? or return None?
         popt, pcov = curve_fit(
-            self._calculate_nonlinear_profile, 
+            _calculate_nonlinear_profile, 
             X, y, 
             params.as_array(), 
             method = self.fit_method, 
@@ -149,7 +176,7 @@ class NonLinearVerticalModel(BaseVerticalModel):
             maxfev=5000
             )
 
-        return NonLinearVerticalFit(parameters=NonLinearProfileParams.from_array(popt))
+        return FittedNonLinearLapseRateModel(parameters=NonLinearProfileParams.from_array(popt))
 
 if __name__ == '__main__':
 
@@ -169,7 +196,7 @@ if __name__ == '__main__':
         h0=650.0,
         h1=1750.0,
     )
-    y_true = NonLinearVerticalModel._calculate_nonlinear_profile(
+    y_true = _calculate_nonlinear_profile(
         elevation=X,
         t0=true_params.t0,
         gamma=true_params.gamma,
@@ -179,7 +206,7 @@ if __name__ == '__main__':
     )
     y = y_true + rng.normal(loc=0.0, scale=0.35, size=X.shape)
 
-    model = NonLinearVerticalModel()
+    model = NonLinearLapseRateModel()
 
     fit = model.fit(X, y)
 
@@ -189,7 +216,7 @@ if __name__ == '__main__':
     fig, ax = plt.subplots()
     ax.scatter(y, X, label="Synthetic stations", color="tab:blue")
     ax.plot(
-        NonLinearVerticalModel._calculate_nonlinear_profile(x_pred, *true_params.as_array()),
+        _calculate_nonlinear_profile(x_pred, *true_params.as_array()),
         x_pred,
         label="True profile",
         color="tab:green",
