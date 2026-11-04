@@ -1,7 +1,5 @@
 import logging
-from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from numbers import Integral, Real
 from typing import Any
 
 import numpy as np
@@ -10,9 +8,10 @@ import xarray as xr
 from sklearn.metrics import mean_absolute_error, root_mean_squared_error
 from sklearn.model_selection import KFold, ParameterGrid
 
+from ..config import CrossValidationConfig
+from ..utils import to_utc_timestamp
 from .distance import DistanceField
 from .interpolator import InterpolationJob, Interpolator
-from ..utils import to_utc_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -20,63 +19,6 @@ _SCORING_FUNCTIONS = {
     'rmse': root_mean_squared_error,
     'mae': mean_absolute_error
 }
-
-
-def validate_cross_validation_options(
-    *,
-    param_grid: Mapping[str, Sequence[Any]],
-    n_splits: int | None,
-    min_relative_score_improvement: float | None,
-    improvement_latency_steps: int,
-    metric: str,
-) -> str:
-    """Validate cross-validation options and return a normalized metric name."""
-    if not isinstance(param_grid, Mapping) or set(param_grid) != {"lam_value"}:
-        keys = param_grid.keys() if isinstance(param_grid, Mapping) else type(param_grid)
-        raise ValueError(
-            "Cross-validation parameter grid must contain exactly one parameter named "
-            f"'lam_value'. Got {keys}"
-        )
-
-    lam_values = param_grid["lam_value"]
-    if isinstance(lam_values, (str, bytes)) or not isinstance(lam_values, Sequence):
-        raise TypeError("Parameter grid for lam_value must be a sequence of numeric values")
-    if not lam_values:
-        raise ValueError("Parameter grid for lam_value cannot be empty")
-    if any(not isinstance(value, Real) or not np.isfinite(value) for value in lam_values):
-        raise ValueError("Parameter grid for lam_value must contain only finite numeric values")
-
-    if n_splits is not None and (
-        isinstance(n_splits, bool) or not isinstance(n_splits, Integral) or n_splits < 2
-    ):
-        raise ValueError(f"n_splits must be an integer greater than or equal to 2. Got {n_splits}")
-    if (
-        isinstance(improvement_latency_steps, bool)
-        or not isinstance(improvement_latency_steps, Integral)
-        or improvement_latency_steps < 1
-    ):
-        raise ValueError(
-            "improvement_latency_steps must be an integer greater than 0. "
-            f"Got {improvement_latency_steps}"
-        )
-    if min_relative_score_improvement is not None and (
-        not isinstance(min_relative_score_improvement, Real)
-        or not np.isfinite(min_relative_score_improvement)
-        or min_relative_score_improvement < 0
-    ):
-        raise ValueError(
-            "min_relative_score_improvement must be a finite value greater than or "
-            f"equal to 0, or None. Got {min_relative_score_improvement}"
-        )
-    if not isinstance(metric, str):
-        raise TypeError(f"metric must be a string. Got {type(metric)}")
-
-    normalized_metric = metric.lower()
-    if normalized_metric not in _SCORING_FUNCTIONS:
-        raise ValueError(
-            f"Unknown metric {metric}. Choose one of {_SCORING_FUNCTIONS.keys()}"
-        )
-    return normalized_metric
 
 def _point_distances(
     distance_fields: DistanceField,
@@ -186,12 +128,14 @@ def cross_validate(
     metric: str = 'rmse',
 ):
 
-    metric = validate_cross_validation_options(
+    ##Validate cv options
+    config = CrossValidationConfig(
+        enabled = True,
         param_grid=param_grid,
         n_splits=n_splits,
         min_relative_score_improvement=min_relative_score_improvement,
         improvement_latency_steps=improvement_latency_steps,
-        metric=metric,
+        select_by=metric,
     )
 
     if not isinstance(distance_fields, DistanceField):
@@ -199,19 +143,21 @@ def cross_validate(
     if estimator.residual_model is None:
         raise ValueError("Cross validation requires a residual model")
 
-    scoring_function = _SCORING_FUNCTIONS[metric]
+    scoring_function = _SCORING_FUNCTIONS[config.select_by]
 
     observations = job.observations.reset_index(drop=True)
     point_distances = _point_distances(distance_fields, observations)
 
-    if n_splits is None:
+    if config.n_splits is None:
         n_splits = len(observations)
+    else:
+        n_splits = config.n_splits
 
     ## Build cv-folds
     cv_folds = list(KFold(n_splits).split(observations))
 
     ## Build cv-parameter-grid
-    sorted_grid = {"lam_value": sorted(param_grid["lam_value"])}
+    sorted_grid = {"lam_value": sorted(config.param_grid["lam_value"])}
     parameter_grid = ParameterGrid(sorted_grid)
 
     results = []
@@ -272,12 +218,12 @@ def cross_validate(
         param_combination_results = pd.concat(rows)
         results.append(param_combination_results)
 
-        if min_relative_score_improvement is None:
+        if config.min_relative_score_improvement is None:
             continue
         else:
             current_score = scoring_function(param_combination_results['observed'], param_combination_results['predicted'])
 
-            if _is_marginal_improvement(current_score, best_param_score, min_improvement = min_relative_score_improvement):
+            if _is_marginal_improvement(current_score, best_param_score, min_improvement = config.min_relative_score_improvement):
                 logger.debug("Setting best score from %s to %s", best_param_score, current_score)
                 best_param_score = current_score
                 stalled_steps = 0
@@ -287,15 +233,15 @@ def cross_validate(
                     "No score improvement for parameter combination %s: %s (candidate) vs %s (current). Stalled steps: %s", 
                     param_combination, current_score, best_param_score, stalled_steps)
         
-        if stalled_steps >= improvement_latency_steps:
+        if stalled_steps >= config.improvement_latency_steps:
             logger.debug("Stopping parameter search because improvement latency has been reached at score %s", best_param_score)
             search_stopped = True
             break
 
     return CrossValidationResult(
         fold_results = pd.concat(results),
-        param_grid = param_grid,
+        param_grid = config.param_grid,
         n_splits = n_splits,
         search_stopped = search_stopped,
-        selection_metric = metric,
+        selection_metric = config.select_by,
     )
