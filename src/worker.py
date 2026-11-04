@@ -1,5 +1,5 @@
 import logging
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import xarray as xr
@@ -122,10 +122,11 @@ def process_interpolation_job(
                 cross_validation_config.select_by,
                 best_score,
             )
-        else:
-            if 'lam_value' in distance_fields.coords and distance_fields.sizes['lam_value'] > 1:
-                logger.warning("Multiple lam_values present in distance_fields, but cv is disables. First lam_value is used for interpolation.")
-                distance_fields = distance_fields.isel(lam_value = 0)
+        elif interpolator.requires_distances and distance_fields is not None:
+            data = distance_fields.data
+            if data is not None and data.sizes.get('lam_value', 0) > 1:
+                logger.warning("Multiple lam_values present in distance_fields, but CV is disabled. First lam_value is used for interpolation.")
+                best_params = {"lam_value": data.lam_value.values[0].item()}
 
         prediction_result = interpolator.run(
             job=job,

@@ -201,10 +201,20 @@ if __name__ == '__main__':
 
     model = NonLinearLapseRateModel()
 
-    fit = model.fit(X, y)
+    station_ids = [str(i) for i in range(X.size)]
+    fit = model.fit(
+        xr.Dataset({"elevation": ("id", X)}, coords={"id": station_ids}),
+        xr.DataArray(y, dims="id", coords={"id": station_ids}),
+    )
 
     x_pred = np.arange(np.min(X), np.max(X), step = 1)
-    preds = fit.predict(x_pred)
+    targets = xr.Dataset(
+        {"elevation": ("target_id", x_pred)},
+        coords={"target_id": np.arange(x_pred.size),
+                "x": ("target_id", np.zeros(x_pred.size)),
+                "y": ("target_id", np.zeros(x_pred.size))},
+    )
+    preds = fit.predict(targets)
 
     fig, ax = plt.subplots()
     ax.scatter(y, X, label="Synthetic stations", color="tab:blue")

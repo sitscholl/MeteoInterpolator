@@ -20,25 +20,6 @@ _SCORING_FUNCTIONS = {
     'mae': mean_absolute_error
 }
 
-def _point_distances(
-    distance_fields: DistanceField,
-    observations: pd.DataFrame,
-) -> xr.DataArray | None:
-    if distance_fields is None:
-        return None
-
-    ids = observations["station_id"].to_numpy(dtype=str)
-    x_coords = observations["x"].to_numpy(dtype=float)
-    y_coords = observations["y"].to_numpy(dtype=float)
-
-    point_distances = distance_fields.to_points(ids, x_coords, y_coords)
-    # Nearest-cell sampling leaves raster cell coordinates in x/y. Associate
-    # those sampled distances with the requested station coordinates for predict.
-    return point_distances.assign_coords(
-        x=point_distances.coords["target_x"],
-        y=point_distances.coords["target_y"],
-    )
-
 def _is_marginal_improvement(candidate_score, current_best, min_improvement):
     if candidate_score is None:
         raise ValueError("Candidate score cannot be None")
@@ -71,7 +52,7 @@ def _build_target_grid(observations: pd.DataFrame, crs: str | int):
             "y": ("target_id", observations["y"].to_numpy(dtype=float)),
         },
         name="elevation",
-    ).rio.write_crs(crs)
+    ).to_dataset().rio.write_crs(crs)
 
 @dataclass(frozen=True)
 class CrossValidationResult:
@@ -140,13 +121,16 @@ def cross_validate(
 
     if not isinstance(distance_fields, DistanceField):
         raise TypeError(f"Distance fields must be of type DistanceField. Got {type(distance_fields)}")
-    if estimator.residual_model is None:
-        raise ValueError("Cross validation requires a residual model")
+    if not estimator.requires_distances:
+        raise ValueError("Cross validation enabled but estimator requires no distance tuning.")
 
     scoring_function = _SCORING_FUNCTIONS[config.select_by]
 
     observations = job.observations.reset_index(drop=True)
-    point_distances = _point_distances(distance_fields, observations)
+    # Use the same authoritative geometry as InterpolationJob.to_arrays().
+    points = job.training_points.loc[observations["station_id"]]
+    observations["x"] = points.geometry.x.to_numpy()
+    observations["y"] = points.geometry.y.to_numpy()
 
     if config.n_splits is None:
         n_splits = len(observations)
@@ -180,12 +164,6 @@ def cross_validate(
 
                 if len(train_obs) < estimator.min_sample_size:
                     raise ValueError(f"{estimator.min_sample_size} samples are required for model fitting. Got {len(train_obs)} for fold {i}.")
-
-                fold_distances = (
-                    point_distances.sel(target_id=point_distances.target_id.isin(test_ids))
-                    if point_distances is not None
-                    else None
-                )
                 
                 fold_job = InterpolationJob(
                             timestamp=to_utc_timestamp(job.timestamp, raise_missing_timezone = True),
@@ -193,15 +171,13 @@ def cross_validate(
                             observations=train_obs,
                             training_points=job.training_points.loc[train_obs['station_id'].astype(str).tolist()],
                         )
-                fitted = estimator.fit(fold_job)
-                #Predict with distance correction
-                fold_prediction = estimator.predict(
-                        fitted,
-                        test_targets,
-                        fold_distances,
-                        **param_combination,
-                    )
-                predicted_values = fold_prediction.prediction.values
+                fold_prediction = estimator.run(
+                    job=fold_job,
+                    targets=test_targets,
+                    distance_fields=distance_fields,
+                    **param_combination,
+                )
+                predicted_values = fold_prediction.prediction.sel(target_id=test_ids).values
                 
                 fold_result = pd.DataFrame({
                     **param_combination,

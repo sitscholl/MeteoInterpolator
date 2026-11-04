@@ -149,7 +149,7 @@ class InterpolationModel(ABC):
         model_cls = cls.registry.get(key)
         if model_cls is None:
             available = ", ".join(sorted(cls.registry)) or "none"
-            raise ValueError(f"Unknown vertical model '{key}'. Available: {available}")
+            raise ValueError(f"Unknown interpolation model '{key}'. Available: {available}")
         return model_cls(**kwargs)
 
     @staticmethod

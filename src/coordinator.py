@@ -173,7 +173,7 @@ class InterpolationCoordinator:
                 "enabled": self.context.gapfiller is not None,
                 "settings": self.context.config.get("gapfilling"),
             },
-            "distance": self.context.config.get("interpolation", {}).get("distance"),
+            "distance": self.context.config.get("distance"),
         })
         summaries = []
         for result in self._submit_jobs(prepared):
