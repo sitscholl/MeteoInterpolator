@@ -151,7 +151,7 @@ class NonLinearLapseRateModel(InterpolationModel):
         X, y = self._validate_training_data(X, y, required_predictors=('elevation',))
 
         if X['elevation'].size < 5:
-            raise ValueError(f"Nonlinear lapse-rate model requires at least five valid samples. Got {x_arr.size}.")
+            raise ValueError(f"Nonlinear lapse-rate model requires at least five valid samples. Got {X['elevation'].size}.")
         
         params = self._get_initial_params(X, y)
         
