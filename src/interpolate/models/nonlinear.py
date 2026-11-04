@@ -111,7 +111,7 @@ class NonLinearLapseRateModel(InterpolationModel):
 
     @classmethod
     def key(cls):
-        return "nonlinear lapse rate model"
+        return "nonlinear_lapse_rate"
 
     def _get_initial_params(self, X, y):
         if self.initial_parameters is not None:
@@ -126,19 +126,23 @@ class NonLinearLapseRateModel(InterpolationModel):
                 h1 = 1500
             )
 
-        high_elevation = X > self.initial_params_elev_threshold
-        fit_X = X[high_elevation]
-        fit_y = y[high_elevation]
-        if fit_X.size < 2:
+        elevation = X["elevation"]
+        high_ids = elevation.id.where(
+            elevation > self.initial_params_elev_threshold,
+            drop=True,
+        )
+        if high_ids.size < 2:
             logger.warning(
                 "Fewer than two stations above %.1f m. Using all stations for nonlinear initial parameters.",
                 self.initial_params_elev_threshold,
             )
-            fit_X = X
-            fit_y = y
+        fit_ids = high_ids if high_ids.size >= 2 else elevation.id
 
-        fit_X = xr.Dataset({"elevation": fit_X})
-        linear_fit = LinearLapseRateModel().fit(fit_X, fit_y)
+        linear_fit = LinearLapseRateModel().fit(
+            X.sel(id=fit_ids),
+            y.sel(id=fit_ids),
+        )
+
         t0 = float(linear_fit.intercept)
         gamma = float(-linear_fit.coef[0])
         return NonLinearProfileParams(t0, gamma, 0.0, 500.0, 1500.0)
@@ -146,22 +150,19 @@ class NonLinearLapseRateModel(InterpolationModel):
     def fit(self, X: xr.Dataset, y: xr.DataArray):
         X, y = self._validate_training_data(X, y, required_predictors=('elevation',))
 
-        if X['elevation'].shape[0] != y['elevation'].shape[0]:
-            raise ValueError(f"X and y must contain the same number of samples. Got {X.shape[0]} and {y.shape[0]}.")
-
+        if X['elevation'].size < 5:
+            raise ValueError(f"Nonlinear lapse-rate model requires at least five valid samples. Got {x_arr.size}.")
+        
         params = self._get_initial_params(X, y)
-
-        X = np.asarray(X['elevation'], dtype=float).reshape(-1)
-        if X.size < 5:
-            raise ValueError(f"Nonlinear lapse-rate model requires at least five valid samples. Got {X.size}.")
-
+        
         y = np.asarray(y, dtype=float).reshape(-1)
         sigma = np.ones_like(y)
 
         ##todo: Handle failed fit. Raise error? or return None?
+        x_arr = np.asarray(X['elevation'], dtype=float).reshape(-1)
         popt, pcov = curve_fit(
             _calculate_nonlinear_profile, 
-            X, y, 
+            x_arr, y, 
             params.as_array(), 
             method = self.fit_method, 
             sigma = sigma, 

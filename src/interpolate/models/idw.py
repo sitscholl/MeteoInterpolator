@@ -65,8 +65,8 @@ class FittedIDWModel(FittedInterpolationModel):
 
         return xr.DataArray(
             interpolated,
-            dims=targets.dims,
-            coords=targets.coors,
+            dims=distances.dims[1:],
+            coords=targets.coords,
             name="IDWModel predictions",
             attrs={
                 "description": "Inverse distance weighted predictions.",
@@ -92,7 +92,7 @@ class IDWModel(InterpolationModel):
 
     @classmethod
     def key(cls) -> str:
-        return "inverse distance weighting"
+        return "inverse_distance_weighting"
 
     @property
     def requires_distances(self):

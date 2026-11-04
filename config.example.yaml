@@ -29,8 +29,8 @@ cache:
 interpolation:
   min_sample_size: 3
 
-  vertical_model:
-    type: nonlinear
+  primary_model:
+    type: nonlinear_lapse_rate
     fit_method: "trf"
     fit_initial_params: True
     initial_params_elev_threshold: 1500

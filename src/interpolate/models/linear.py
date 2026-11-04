@@ -40,13 +40,13 @@ class LinearLapseRateModel(InterpolationModel):
 
     @classmethod
     def key(cls):
-        return "linear lapse-rate model"
+        return "linear_lapse_rate"
 
     def fit(self, X: xr.Dataset, y: xr.DataArray):
         X, y = self._validate_training_data(X, y, required_predictors=('elevation',))
 
         estimator = LinearRegression(**self.kwargs)
-        estimator.fit(X['elevation'].reshape(-1, 1), y)
+        estimator.fit(X["elevation"].to_numpy().reshape(-1, 1), y)
         return FittedLinearLapseRateModel(
             coef=tuple(float(value) for value in np.ravel(estimator.coef_)),
             intercept=float(estimator.intercept_),

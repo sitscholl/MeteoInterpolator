@@ -69,7 +69,8 @@ class FittedInterpolationModel(ABC):
         _validate_predictors(targets, required_predictors, dims, allow_nan=True)
         return dims
 
-    def _validate_distances(self, distances: xr.DataArray, source_ids, targets):
+    @staticmethod
+    def _validate_distances(distances: xr.DataArray, source_ids, targets):
         """Return distances in fitted-source order and canonical target order.
 
         Extra cached sources are allowed; missing fitted sources are errors.
@@ -77,8 +78,8 @@ class FittedInterpolationModel(ABC):
         """
         if not isinstance(distances, xr.DataArray):
             raise TypeError(f"distances must be an xarray DataArray. Got {type(distances)}")
-            
-        dims = self._validate_targets(targets)
+
+        dims = FittedInterpolationModel._validate_targets(targets)
         if set(distances.dims) != {"id", *dims}:
             raise ValueError(f"Distances must have dimensions {('id', *dims)}; select lambda/time first.")
 
