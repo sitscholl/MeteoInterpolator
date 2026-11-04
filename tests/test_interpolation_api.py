@@ -12,6 +12,11 @@ from src.api.schemas import InterpolationRequest, InterpolationSubmission
 def interpolation_client(monkeypatch):
     submit = AsyncMock(return_value=InterpolationSubmission(request_id="run-1", status="queued"))
     monkeypatch.setattr(app.state, "coordinator", SimpleNamespace(submit=submit), raising=False)
+    monkeypatch.setattr(
+        app.state, "runtime",
+        SimpleNamespace(interpolation_status=SimpleNamespace(enabled=True, reason=None)),
+        raising=False,
+    )
     # Skip lifespan: these endpoint tests require no database or scheduler.
     client = TestClient(app, raise_server_exceptions=False)
     try:
@@ -26,8 +31,8 @@ def test_interpolation_endpoint_forwards_frequency(interpolation_client, freq, e
     params = {"param": "tair_2m", "start": "2026-01-01", "end": "2026-01-02"}
     if freq is not None:
         params["freq"] = freq
-    response = client.get("/api/interpolate", params=params)
-    assert response.status_code == 200
+    response = client.post("/api/interpolate", params=params)
+    assert response.status_code == 202
     assert response.json() == {"request_id": "run-1", "status": "queued"}
     submit.assert_awaited_once()
     request = submit.await_args.args[0]
@@ -38,9 +43,31 @@ def test_interpolation_endpoint_forwards_frequency(interpolation_client, freq, e
 @pytest.mark.parametrize("freq", ["2h", "30min", "ME", "d", "H", ""])
 def test_interpolation_endpoint_rejects_unsupported_frequency(interpolation_client, freq):
     client, submit = interpolation_client
-    response = client.get("/api/interpolate", params={
+    response = client.post("/api/interpolate", params={
         "param": "tair_2m", "start": "2026-01-01", "end": "2026-01-02", "freq": freq,
     })
     assert response.status_code == 422
     assert any(error["loc"] == ["query", "freq"] for error in response.json()["detail"])
+    submit.assert_not_awaited()
+
+
+def test_interpolation_endpoint_rejects_submission_when_cache_unavailable(
+    interpolation_client, monkeypatch
+):
+    client, submit = interpolation_client
+    monkeypatch.setattr(
+        app.state, "runtime",
+        SimpleNamespace(interpolation_status=SimpleNamespace(
+            enabled=False, reason="No distance fields available."
+        )),
+    )
+
+    response = client.post("/api/interpolate", params={
+        "param": "tair_2m", "start": "2026-01-01", "end": "2026-01-02",
+    })
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == (
+        "Interpolation is not available, reason: No distance fields available."
+    )
     submit.assert_not_awaited()

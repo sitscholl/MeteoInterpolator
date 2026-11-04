@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 import geopandas as gpd
 import xarray as xr
+from pydantic import ValidationError
 from shapely.geometry import Point
 
 from src.interpolate import cross_validate
@@ -11,7 +12,7 @@ from src.interpolate.distance import DistanceField
 from src.interpolate.idw import InverseDistanceWeighting
 from src.interpolate.interpolator import InterpolationJob, Interpolator
 from src.interpolate.vertical import LinearVerticalModel
-from src.runtime import CrossValidationConfig
+from src.config import CrossValidationConfig
 
 
 def _lambda_search_fixture():
@@ -196,12 +197,46 @@ def test_cross_validate_lambda_search_patience_allows_later_improvement():
 
 
 def test_cross_validation_config_rejects_unknown_selection_metric():
-    with pytest.raises(ValueError, match="Unknown metric"):
+    with pytest.raises(ValidationError) as error:
         CrossValidationConfig(
             enabled=True,
             param_grid={"lam_value": [0, 1]},
             select_by="bias",
         )
+    assert error.value.errors()[0]["loc"] == ("select_by",)
+    assert error.value.errors()[0]["type"] == "literal_error"
+
+
+def test_cross_validation_config_disabled_defaults_need_no_grid():
+    config = CrossValidationConfig()
+
+    assert not config.enabled
+    assert config.param_grid is None
+    assert config.select_by == "rmse"
+    assert config.improvement_latency_steps == 3
+
+
+def test_cross_validation_config_normalizes_and_preserves_settings():
+    config = CrossValidationConfig.model_validate({
+        "enabled": True,
+        "param_grid": {"lam_value": [0, "1", 2.5]},
+        "n_splits": 3,
+        "min_relative_score_improvement": 0.1,
+        "improvement_latency_steps": 2,
+        "select_by": "MAE",
+    })
+
+    assert config.param_grid == {"lam_value": [0.0, 1.0, 2.5]}
+    assert config.n_splits == 3
+    assert config.min_relative_score_improvement == 0.1
+    assert config.improvement_latency_steps == 2
+    assert config.select_by == "mae"
+
+
+@pytest.mark.parametrize("grid", [None, {}, {"lambda": [0]}, {"lam_value": []}])
+def test_enabled_cross_validation_requires_nonempty_supported_grid(grid):
+    with pytest.raises(ValidationError):
+        CrossValidationConfig(enabled=True, param_grid=grid)
 
 
 def test_cross_validate_validates_its_public_options():
@@ -283,27 +318,36 @@ def test_build_target_grid_rejects_missing_columns(column):
 
 
 @pytest.mark.parametrize(
-    "options, error, message",
+    "options, location",
     [
-        ({"param_grid": {"lam_value": []}}, ValueError, "cannot be empty"),
-        ({"param_grid": {"lam_value": "1"}}, TypeError, "sequence"),
-        ({"param_grid": {"lam_value": [np.nan]}}, ValueError, "finite numeric"),
-        ({"param_grid": {"lam_value": [np.inf]}}, ValueError, "finite numeric"),
-        ({"param_grid": {"lam_value": ["1"]}}, ValueError, "finite numeric"),
-        ({"n_splits": 1}, ValueError, "n_splits"),
-        ({"n_splits": True}, ValueError, "n_splits"),
-        ({"n_splits": 1.5}, ValueError, "n_splits"),
-        ({"n_splits": 5}, ValueError, "number of splits"),
-        ({"improvement_latency_steps": 0}, ValueError, "improvement_latency_steps"),
-        ({"improvement_latency_steps": True}, ValueError, "improvement_latency_steps"),
-        ({"min_relative_score_improvement": -0.1}, ValueError, "min_relative"),
-        ({"min_relative_score_improvement": np.nan}, ValueError, "min_relative"),
-        ({"metric": "bias"}, ValueError, "Unknown metric"),
-        ({"metric": None}, TypeError, "metric must be a string"),
-        ({"distance_fields": None}, TypeError, "Distance fields must be"),
+        ({"param_grid": {"lam_value": "1"}}, ("param_grid", "lam_value")),
+        ({"param_grid": {"lam_value": [np.nan]}}, ()),
+        ({"param_grid": {"lam_value": [np.inf]}}, ()),
+        ({"n_splits": 1}, ("n_splits",)),
+        ({"n_splits": True}, ("n_splits",)),
+        ({"n_splits": 1.5}, ("n_splits",)),
+        ({"improvement_latency_steps": 0}, ("improvement_latency_steps",)),
+        ({"improvement_latency_steps": True}, ("improvement_latency_steps",)),
+        ({"min_relative_score_improvement": -0.1}, ("min_relative_score_improvement",)),
+        ({"min_relative_score_improvement": np.nan}, ("min_relative_score_improvement",)),
+        ({"min_relative_score_improvement": np.inf}, ("min_relative_score_improvement",)),
+        ({"metric": "bias"}, ("select_by",)),
+        ({"metric": None}, ("select_by",)),
     ],
 )
-def test_cross_validate_rejects_invalid_options(options, error, message):
+def test_cross_validate_rejects_invalid_options(options, location):
+    interpolator, job, distances = _lambda_search_fixture()
+    kwargs = {"param_grid": {"lam_value": [0]}, "distance_fields": distances, **options}
+    with pytest.raises(ValidationError) as error:
+        cross_validate(interpolator, job, **kwargs)
+    assert error.value.errors()[0]["loc"] == location
+
+
+@pytest.mark.parametrize("options,error,message", [
+    ({"n_splits": 5}, ValueError, "number of splits"),
+    ({"distance_fields": None}, TypeError, "Distance fields must be"),
+])
+def test_cross_validate_checks_job_requirements_after_config(options, error, message):
     interpolator, job, distances = _lambda_search_fixture()
     kwargs = {"param_grid": {"lam_value": [0]}, "distance_fields": distances, **options}
     with pytest.raises(error, match=message):

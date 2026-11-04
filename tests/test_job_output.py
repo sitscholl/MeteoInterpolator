@@ -22,7 +22,7 @@ from src.interpolate.idw import InverseDistanceWeighting
 from src.interpolate.interpolator import InterpolationJob, Interpolator
 from src.interpolate.vertical import LinearVerticalModel
 from src.meteo.resample import MeteoResampler
-from src.runtime import CrossValidationConfig
+from src.config import CrossValidationConfig
 from src.worker import process_interpolation_job
 from src.write import write_job_result
 

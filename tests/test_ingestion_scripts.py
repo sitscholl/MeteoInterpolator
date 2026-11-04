@@ -9,8 +9,8 @@ from zoneinfo import ZoneInfo
 import pytest
 import xarray as xr
 
-import src.config as config_module
 from src.database.db import InterpolationDB
+from src.meteo import BaseMeteoHandler
 
 
 @pytest.fixture
@@ -47,10 +47,10 @@ def script_environment(monkeypatch, tmp_path):
     database = Mock()
     database.get_last_row.return_value = None
     database_factory = Mock(return_value=database)
-    monkeypatch.setattr(config_module, "InterpolationDB", database_factory)
+    monkeypatch.setattr("src.database.db.InterpolationDB", database_factory)
     loader = SimpleNamespace(get_station_info=AsyncMock(return_value={"station-a": {}}))
     loader_factory = Mock(return_value=loader)
-    monkeypatch.setattr(config_module.BaseMeteoHandler, "create", loader_factory)
+    monkeypatch.setattr(BaseMeteoHandler, "create", loader_factory)
     ingestor = SimpleNamespace(
         upsert_station=AsyncMock(return_value=SimpleNamespace(status="completed")),
         refresh_database=AsyncMock(return_value=SimpleNamespace(n_failed=0)),

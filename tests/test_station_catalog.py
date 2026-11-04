@@ -1,12 +1,15 @@
-import asyncio
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pandas as pd
 import pytest
 import xarray as xr
 from pandera.errors import SchemaError
+from pydantic import ValidationError
+import yaml
 
 from src.aoi import AOI
+from src.config import MeteoDataConfig
 from src.domain.dem import DEM
 from src.runtime import RuntimeContext, load_station_catalog
 
@@ -102,7 +105,7 @@ def test_runtime_retains_catalog_but_selects_only_active_ids(monkeypatch, tmp_pa
     monkeypatch.setattr('src.meteo.province.ProvinceAPI.get_station_info', discovery)
     runtime = RuntimeContext(config=config)
     try:
-        asyncio.run(runtime.initialize_runtime(config))
+        runtime.initialize_runtime(config)
         assert runtime.initialized
         assert runtime.active_stations == ['001']
         assert runtime.station_catalog.station_id.tolist() == ['001', '002']
@@ -120,6 +123,108 @@ def test_runtime_rejects_inactive_catalog_before_database_sync(monkeypatch, cata
     monkeypatch.setattr('src.runtime.load_dem', lambda **kwargs: dem)
     runtime = RuntimeContext(config=config)
     with pytest.raises(ValueError, match='No active stations'):
-        asyncio.run(runtime.initialize_runtime(config))
+        runtime.initialize_runtime(config)
     assert runtime.db is None
     assert not runtime.initialized
+
+
+def test_runtime_factory_initializes_synchronously(
+    monkeypatch, tmp_path, catalog_file, dem
+):
+    config = _config(catalog_file())
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("src.runtime.load_dem", lambda **kwargs: dem)
+
+    runtime = RuntimeContext.from_config_file(config_path)
+    try:
+        assert isinstance(runtime, RuntimeContext)
+        assert runtime.initialized
+        assert runtime.config_file == config_path
+        assert runtime.config == config
+    finally:
+        runtime.db.close()
+        dem.data.close()
+
+
+def test_runtime_validates_cv_before_opening_resources(monkeypatch, catalog_file):
+    config = _config(catalog_file())
+    config["cross_validation"] = {"n_splits": 1}
+    load_dem = Mock(side_effect=AssertionError("DEM must not be opened"))
+    create_db = Mock(side_effect=AssertionError("Database must not be opened"))
+    monkeypatch.setattr("src.runtime.load_dem", load_dem)
+    monkeypatch.setattr(MeteoDataConfig, "create_database_handler", create_db)
+    runtime = RuntimeContext(config=config)
+
+    with pytest.raises(ValidationError):
+        runtime.initialize_runtime(config)
+
+    load_dem.assert_not_called()
+    create_db.assert_not_called()
+    assert not runtime.initialized
+
+
+@pytest.mark.parametrize("cache_hit", [False, True])
+def test_runtime_loads_distance_cache_and_sets_availability(
+    monkeypatch, tmp_path, catalog_file, dem, cache_hit
+):
+    config = _config(catalog_file())
+    config["cache"] = {"enabled": True, "cache_dir": str(tmp_path / "cache")}
+    config["interpolation"]["residual_model"] = {
+        "type": "inverse_distance_weighting", "neighbours": 1,
+    }
+    config["distance"] = {"type": "euclidean"}
+    cached_fields = object() if cache_hit else None
+    calculator = SimpleNamespace(load_cache=Mock(return_value=cached_fields))
+    cache_managers = []
+
+    def create_calculator(handler, *, cache_manager, **options):
+        assert handler == "euclidean"
+        assert cache_manager.cache_dir == tmp_path / "cache"
+        cache_managers.append(cache_manager)
+        return calculator
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("src.runtime.load_dem", lambda **kwargs: dem)
+    monkeypatch.setattr(
+        "src.runtime.BaseDistanceCalculator.create", create_calculator
+    )
+    runtime = RuntimeContext(config=config)
+    try:
+        runtime.initialize_runtime(config)
+        assert runtime.initialized
+        assert cache_managers == [runtime.cache_manager]
+        assert runtime.distance_fields is cached_fields
+        assert runtime.interpolation_status.enabled is cache_hit
+        assert runtime.interpolation_status.reason == (
+            None if cache_hit else "No distance fields available."
+        )
+        calculator.load_cache.assert_called_once()
+    finally:
+        if runtime.db is not None:
+            runtime.db.close()
+        dem.data.close()
+
+
+def test_runtime_closes_opened_resources_on_sync_failure(
+    monkeypatch, tmp_path, catalog_file, dem
+):
+    config = _config(catalog_file())
+    close_dem = Mock()
+    dem.data.set_close(close_dem)
+    database = Mock()
+    database.sync_catalog.side_effect = RuntimeError("catalog sync failed")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("src.runtime.load_dem", lambda **kwargs: dem)
+    monkeypatch.setattr(
+        MeteoDataConfig, "create_database_handler", lambda self: database
+    )
+    runtime = RuntimeContext(config=config)
+
+    with pytest.raises(RuntimeError, match="catalog sync failed"):
+        runtime.initialize_runtime(config)
+
+    assert not runtime.initialized
+    database.close.assert_called_once()
+    close_dem.assert_called_once()

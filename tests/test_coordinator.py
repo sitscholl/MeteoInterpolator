@@ -22,7 +22,7 @@ class _RecordingDistanceCalculator:
     def __init__(self):
         self.calls = []
 
-    def calculate_fields(self, dem, x_coords, y_coords, point_ids):
+    def load_cache(self, dem, x_coords, y_coords, point_ids):
         self.calls.append(
             {
                 "dem": dem,
@@ -148,10 +148,10 @@ def test_handler_loads_supported_stations_with_cached_sensor_catalogue():
     assert meteo_loader.calls[0]["sensor_codes"] == ["tair_2m"]
 
 
-def test_build_distance_fields_uses_stable_sorted_station_set():
+def test_load_cached_distance_fields_uses_stable_sorted_active_station_set():
     runtime, distance_calculator = _runtime_with_distance_calculator()
 
-    distance_fields = runtime.build_distance_fields()
+    distance_fields = runtime.load_cached_distance_fields()
 
     assert isinstance(distance_fields, DistanceField)
     assert distance_calculator.calls[0]["point_ids"] == ["a", "b"]
@@ -159,12 +159,19 @@ def test_build_distance_fields_uses_stable_sorted_station_set():
     assert distance_calculator.calls[0]["y_coords"] == [0.0, 1.0]
 
 
-def test_build_distance_fields_requires_a_distance_calculator():
+def test_load_cached_distance_fields_requires_a_distance_calculator():
     runtime, _ = _runtime_with_distance_calculator()
     runtime.distance_calculator = None
 
     with pytest.raises(ValueError, match="no distance calculator"):
-        runtime.build_distance_fields()
+        runtime.load_cached_distance_fields()
+
+
+def test_load_cached_distance_fields_preserves_cache_miss(monkeypatch):
+    runtime, calculator = _runtime_with_distance_calculator()
+    monkeypatch.setattr(calculator, "load_cache", lambda *args: None)
+
+    assert runtime.load_cached_distance_fields() is None
 
 
 def test_request_frequency_controls_jobs_without_changing_shared_state(monkeypatch, tmp_path):
