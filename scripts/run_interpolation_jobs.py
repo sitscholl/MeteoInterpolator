@@ -15,7 +15,7 @@ if __name__ == '__main__':
     logging.getLogger('rasterio').setLevel(logging.WARNING)
 
     async def run_interpolation():
-        runtime = await RuntimeContext.from_config_file('config.example.yaml')
+        runtime = RuntimeContext.from_config_file('config.example.yaml')
         coordinator = InterpolationCoordinator(runtime)
         start = "2021-12-01"
         end = "2021-12-02"

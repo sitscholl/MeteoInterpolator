@@ -72,7 +72,7 @@ class RuntimeContext:
     initialized: bool = field(default=False, init=False)
 
     @classmethod
-    async def from_config_file(cls, config_file: str | Path):
+    def from_config_file(cls, config_file: str | Path):
         config = load_config_file(config_file)
         runtime = cls(config=config, config_file=config_file)
         runtime.initialize_runtime(config)
@@ -232,7 +232,6 @@ class RuntimeContext:
                     raise
 
 if __name__ == '__main__':
-    import asyncio
 
     logging.basicConfig(level = logging.DEBUG, force = True)
-    runtime = asyncio.run(RuntimeContext.from_config_file('config.example.yaml'))
+    runtime = RuntimeContext.from_config_file('config.example.yaml')

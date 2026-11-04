@@ -136,6 +136,8 @@ class CrossValidationConfig(ConfigModel):
             )
         
         lam_values = param_grid['lam_value']
+        if not lam_values:
+            raise ValueError("Parameter grid for lam_value cannot be empty")
         if any(not isinstance(value, Real) or not np.isfinite(value) for value in lam_values):
             raise ValueError("Parameter grid for lam_value must contain only finite numeric values")
 
