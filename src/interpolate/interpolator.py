@@ -9,7 +9,6 @@ import xarray as xr
 from pyproj import CRS
 
 from .distance import DistanceField
-from .models.idw import InverseDistanceWeighting
 from .regions import InterpolationRegions
 from .models import InterpolationModel, FittedInterpolationModel
 
@@ -60,44 +59,35 @@ class InterpolationJob:
         x_coords = training_points.geometry.x.to_numpy(dtype=float)
         y_coords = training_points.geometry.y.to_numpy(dtype=float)
 
-        y = self.observations[self.parameter].to_numpy(dtype=float)
-        X = self.observations["elevation"].to_numpy(dtype=float).reshape(-1, 1)
+        X = xr.Dataset(
+            data_vars = {
+                'elevation': (['id'], self.observations["elevation"].to_numpy(dtype=float))
+            },
+            coords = {
+                'id': ids,
+                'x': ('id', x_coords),
+                'y': ('id', y_coords),
+            },
+            attrs = {'crs': self.training_points.crs.to_wkt()}
+        )
 
-        return y, X, x_coords, y_coords, ids
+        y = xr.DataArray(
+            data = self.observations[self.parameter].to_numpy(dtype=float),
+            dims=("id",),
+            coords = {'id': ids},
+            name = 'observations',
+        )
+
+        return X, y
 
     def __repr__(self):
         return f"InterpolationJob (date: {self.timestamp:%Y-%m-%d %H:%M}, parameter: {self.parameter}, samples: {len(self.observations)})"
 
 @dataclass(frozen=True)
-class FittedInterpolator:
-    vertical_fit: BaseFittedVerticalModel
-    residuals: xr.DataArray
-    job: InterpolationJob
-
-    @property
-    def parameter(self) -> str:
-        return self.job.parameter
-
-    @property
-    def timestamp(self) -> pd.Timestamp:
-        return self.job.timestamp
-
-    @property
-    def residual_summary(self) -> dict[str, float | int]:
-        values = np.asarray(self.residuals.values, dtype=float)
-        return {
-            "n": int(values.size),
-            "mean": float(np.mean(values)),
-            "mae": float(np.mean(np.abs(values))),
-            "rmse": float(np.sqrt(np.mean(values**2))),
-            "min": float(np.min(values)),
-            "max": float(np.max(values)),
-        }
-
-@dataclass(frozen=True)
 class InterpolationPrediction:
     prediction: xr.DataArray
-    vertical_prediction: xr.DataArray
+    primary_prediction: xr.DataArray
+    primary_residuals: xr.DataArray
     residual_prediction: xr.DataArray | None
     lam_value: float | int | None
     station_ids: tuple[str, ...]
@@ -109,17 +99,28 @@ class InterpolationPrediction:
     def to_dataset(self, parameter_name: str):
         ds = xr.Dataset({
             parameter_name: self.prediction,
-            f"{parameter_name}_vertical": self.vertical_prediction
+            f"{parameter_name}_primary": self.primary_prediction
         })
         if self.residual_prediction is not None:
             ds[f"{parameter_name}_residuals"] = self.residual_prediction
         
         return ds
+    
+    def residual_summary(self) -> dict[str, float | int]:
+        values = np.asarray(self.primary_residuals.values, dtype=float)
+        return {
+            "n": int(values.size),
+            "mean": float(np.mean(values)),
+            "mae": float(np.mean(np.abs(values))),
+            "rmse": float(np.sqrt(np.mean(values**2))),
+            "min": float(np.min(values)),
+            "max": float(np.max(values)),
+        }
 
 @dataclass
 class Interpolator:
-    vertical_model: BaseVerticalModel
-    residual_model: InverseDistanceWeighting | None = None
+    primary_model: InterpolationModel
+    residual_model: InterpolationModel | None = None
     regions: InterpolationRegions | None = None
     min_sample_size: int = 3
 
@@ -127,9 +128,9 @@ class Interpolator:
     def from_config(
         cls, config: dict,
     ):
-        vertical_config = dict(config["vertical_model"])
-        vertical_handler = vertical_config.pop("type")
-        vertical_model = BaseVerticalModel.create(vertical_handler, **vertical_config)
+        primary_config = dict(config["primary_model"])
+        primary_handler = primary_config.pop("type")
+        primary_model = InterpolationModel.create(primary_handler, **primary_config)
 
         residual_config = config.get('residual_model')
         if residual_config is None:
@@ -137,9 +138,7 @@ class Interpolator:
         else:
             residual_config = dict(residual_config)
             residual_handler = residual_config.pop('type')
-            if residual_handler != 'inverse_distance_weighting':
-                raise NotImplementedError("Only inverse_distance_weighting is currently supported for the residual model type")
-            residual_model = InverseDistanceWeighting(**residual_config)
+            residual_model = InterpolationModel.create(residual_handler, **residual_config)
 
         ## Interpolation Regions
         region_config = config.get('interpolation_regions')
@@ -150,7 +149,7 @@ class Interpolator:
         min_sample_size = config.get('min_sample_size', 3)
 
         return cls(
-            vertical_model = vertical_model, 
+            primary_model = primary_model, 
             residual_model = residual_model, 
             regions = interpolation_regions, 
             min_sample_size = min_sample_size
@@ -158,12 +157,12 @@ class Interpolator:
 
     @property
     def requires_distances(self):
-        return self.residual_model is not None
+        return any(i.requires_distances for i in [self.primary_model, self.residual_model] if i is not None)
 
     @staticmethod
     def _select_distance_field(
         distance_fields: DistanceField | xr.DataArray,
-        lam_value: float | int | None = None,
+        lam_value: float | None = None,
     ) -> xr.DataArray:
         if isinstance(distance_fields, DistanceField):
             if distance_fields.data is None:
@@ -172,35 +171,16 @@ class Interpolator:
         elif isinstance(distance_fields, xr.DataArray):
             distance_data = distance_fields
         else:
-            raise ValueError(f"distance_fields must be a DistanceField or xarray DataArray. Got {type(distance_fields)}")
+            raise TypeError(f"distance_fields must be a DistanceField or xarray DataArray. Got {type(distance_fields)}")
 
         if "lam_value" in distance_data.dims:
             if lam_value is not None:
-                return distance_data.sel(lam_value=lam_value)
-            return distance_data.isel(lam_value=0)
+                return distance_data.sel(lam_value=lam_value, drop = True)
+            
+            if distance_data.sizes['lam_value'] > 1:
+                raise ValueError("Distance fields contain multiple lambda values but no value for selection provided.")
+
         return distance_data
-
-    def _check_grid_alignment(self, grid: xr.DataArray, distance_field: xr.DataArray):
-        if not isinstance(distance_field, xr.DataArray):
-            raise ValueError(f"distance_field must be an xarray DataArray. Got {type(distance_field)}")
-
-        for coord_name in ("x", "y"):
-            if coord_name not in grid.coords:
-                raise ValueError(f"Prediction grid is missing coordinate '{coord_name}'.")
-            if coord_name not in distance_field.coords:
-                raise ValueError(f"Distance fields are missing coordinate '{coord_name}'.")
-
-            grid_values = np.asarray(grid.coords[coord_name].values)
-            distance_values = np.asarray(distance_field.coords[coord_name].values)
-            if grid_values.shape != distance_values.shape or not np.allclose(
-                grid_values,
-                distance_values,
-                rtol=0,
-                atol=1e-9,
-            ):
-                raise ValueError(
-                    f"Distance field {coord_name} coordinates do not align with the prediction grid."
-                )
 
     @staticmethod
     def _crs_from_target(target) -> CRS | None:
@@ -215,8 +195,8 @@ class Interpolator:
         return None
 
     @classmethod
-    def _check_prediction_crs(cls, model: FittedInterpolator, target) -> None:
-        training_crs = CRS.from_user_input(model.job.training_points.crs)
+    def _check_prediction_crs(cls, job: InterpolationJob, target) -> None:
+        training_crs = CRS.from_user_input(job.training_points.crs)
         target_crs = cls._crs_from_target(target)
         if target_crs is None:
             raise ValueError("Prediction target CRS cannot be None.")
@@ -226,87 +206,74 @@ class Interpolator:
                 f"Got {target_crs.to_string()} vs {training_crs.to_string()}."
             )
 
-    @staticmethod
-    def _residual_array(residuals, ids, x_coords, y_coords) -> xr.DataArray:
-        return xr.DataArray(
-            np.asarray(residuals, dtype=float),
-            dims=("id",),
-            coords={
-                "id": ids,
-                "x": ("id", np.asarray(x_coords, dtype=float)),
-                "y": ("id", np.asarray(y_coords, dtype=float)),
-            },
-            name="residual",
-        )
+    def run(
+        self, 
+        job: InterpolationJob, 
+        targets: xr.Dataset, 
+        distance_fields: DistanceField | xr.DataArray | None = None, 
+        lam_value: float | None = None,
+    ) -> InterpolationPrediction:
 
-    def fit(self, job: InterpolationJob) -> FittedInterpolator:
+        if self.requires_distances and distance_fields is None:
+            raise ValueError('Interpolation requires distance fields but none are provided')
         if not isinstance(job, InterpolationJob):
             raise TypeError(f"Interpolator.fit requires an InterpolationJob. Got {type(job)}")
+        if not isinstance(targets, xr.Dataset):
+            raise TypeError(f"target_points must be  an xarray Dataset. Got {type(targets)}")
+        self._check_prediction_crs(job, targets)
 
-        y, X, x_coords, y_coords, ids = job.to_arrays()
+        X, y = job.to_arrays()
 
-        if len(y) < self.min_sample_size:
+        if len(y.id) < self.min_sample_size:
             raise ValueError(
                 f"Cannot fit interpolation job {job} because only {len(y)} station sample(s) "
                 f"are available and {self.min_sample_size} are required."
             )
 
-        vertical_fit = self.vertical_model.fit(X, y)
-        station_predictions = np.asarray(vertical_fit.predict(X), dtype=float).reshape(-1)
-        residuals = (
-            self._residual_array(y - station_predictions, ids, x_coords, y_coords)
+        #Get distance field with correct lam-value
+        if distance_fields is not None:
+            training_distances = self._select_distance_field(distance_fields, lam_value=lam_value)
+        else:
+            training_distances = None
+
+        if training_distances is not None and "lam_value" in training_distances.coords:
+            lam_value = training_distances.lam_value.values.item()
+
+        #Fit primary model
+        primary_fit = self.primary_model.fit(X, y)
+        primary_prediction = primary_fit.predict(targets, distances=training_distances)
+
+        ## Calculate residuals
+        training_targets = X.rename(id="target_id")
+        station_prediction = primary_fit.predict(
+            training_targets,
+            distances=training_distances,
         )
+        station_prediction = station_prediction.rename(target_id="id")
+        station_prediction = station_prediction.sel(id=y.id)
+        residuals = (y - station_prediction).rename("residual")
 
-        return FittedInterpolator(
-            vertical_fit = vertical_fit,
-            residuals = residuals,
-            job = job
-        )
-
-    def predict(
-        self,
-        model: FittedInterpolator,
-        target_points: xr.DataArray,
-        distance_fields: DistanceField | xr.DataArray | None = None,
-        lam_value: float | None = None,
-    ) -> InterpolationPrediction:
-        
-        if not isinstance(target_points, xr.DataArray):
-            raise TypeError(f"target_points must be  an xarray DataArray. Got {type(target_points)}")
-        
-        self._check_prediction_crs(model, target_points)
-
-        vertical_prediction = model.vertical_fit.predict(target_points)
-        prediction = vertical_prediction
+        ## Fit and predict residual model
+        prediction = primary_prediction
         residual_prediction = None
+        if self.residual_model is not None:
 
-        if self.residual_model is not None and distance_fields is None:
-            logger.warning("Residual model available but no distance fields provided. Residuals will not be interpolated.")
-
-        if self.residual_model is not None and distance_fields is not None:
-            distance_field = self._select_distance_field(distance_fields, lam_value=lam_value)
-            if "lam_value" in distance_field.coords:
-                lam_value = distance_field.lam_value.values.item()
-            residual_prediction = self.residual_model.interpolate(y=model.residuals, distance_field=distance_field)
+            # Fit residual model and predict
+            residual_fit = self.residual_model.fit(X = X, y=residuals)
+            residual_prediction = residual_fit.predict(targets = targets, distances=training_distances)
 
             if residual_prediction is not None:
-                self._check_grid_alignment(vertical_prediction, distance_field)
-                residual_prediction = residual_prediction.assign_coords(
-                    {
-                        "x": vertical_prediction.coords['x'],
-                        "y": vertical_prediction.coords['y'],
-                    }
-                )
-                prediction = vertical_prediction + residual_prediction
+                prediction = primary_prediction + residual_prediction
 
         return InterpolationPrediction(
-            prediction=prediction.rename(model.parameter),
-            vertical_prediction=vertical_prediction.rename(f"{model.parameter}_vertical"),
+            prediction=prediction.rename(job.parameter),
+            primary_prediction=primary_prediction.rename(f"{job.parameter}_primary"),
+            primary_residuals=residuals,
             residual_prediction=(
-                residual_prediction.rename(f"{model.parameter}_residual")
+                residual_prediction.rename(f"{job.parameter}_residual")
                 if residual_prediction is not None
                 else None
             ),
             lam_value=lam_value,
-            station_ids=tuple(model.job.observations["station_id"].astype(str)),
+            station_ids=tuple(job.observations["station_id"].astype(str)),
         )
