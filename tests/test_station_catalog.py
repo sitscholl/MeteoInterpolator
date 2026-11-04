@@ -53,7 +53,7 @@ def _config(path):
             'database': {'engine': 'sqlite:///:memory:'},
         },
         'dem': {'path': 'synthetic-dem'}, 'cache': {'enabled': False},
-        'interpolation': {'vertical_model': {'type': 'linear'}},
+        'interpolation': {'primary_model': {'type': 'linear_lapse_rate'}},
     }
 
 
@@ -166,14 +166,18 @@ def test_runtime_validates_cv_before_opening_resources(monkeypatch, catalog_file
 
 
 @pytest.mark.parametrize("cache_hit", [False, True])
+@pytest.mark.parametrize("standalone", [False, True])
 def test_runtime_loads_distance_cache_and_sets_availability(
-    monkeypatch, tmp_path, catalog_file, dem, cache_hit
+    monkeypatch, tmp_path, catalog_file, dem, cache_hit, standalone
 ):
     config = _config(catalog_file())
     config["cache"] = {"enabled": True, "cache_dir": str(tmp_path / "cache")}
     config["interpolation"]["residual_model"] = {
         "type": "inverse_distance_weighting", "neighbours": 1,
     }
+    if standalone:
+        config["interpolation"]["primary_model"] = config["interpolation"].pop("residual_model")
+        config["cross_validation"] = {"enabled": True, "param_grid": {"lam_value": [0.]}}
     config["distance"] = {"type": "euclidean"}
     cached_fields = object() if cache_hit else None
     calculator = SimpleNamespace(load_cache=Mock(return_value=cached_fields))

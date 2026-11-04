@@ -2,7 +2,13 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from src.interpolate.idw import InverseDistanceWeighting
+from src.interpolate.models import IDWModel
+
+
+def _predict(model, values, distances):
+    fitted = model.fit(xr.Dataset(coords={"id": values.id}), values)
+    targets = xr.Dataset(coords={"x": distances.x, "y": distances.y})
+    return fitted.predict(targets, distances)
 
 
 def test_idw_uses_frei_weighting_formula_for_closest_stations():
@@ -17,7 +23,7 @@ def test_idw_uses_frei_weighting_formula_for_closest_stations():
         coords={"id": ["a", "b", "c"]},
     )
 
-    result = InverseDistanceWeighting(neighbours=2).interpolate(
+    result = _predict(IDWModel(neighbours=2),
         residuals,
         distances,
     )
@@ -38,7 +44,7 @@ def test_idw_returns_exact_residual_at_zero_distance_cell():
         coords={"id": ["a", "b"]},
     )
 
-    result = InverseDistanceWeighting(neighbours=2).interpolate(
+    result = _predict(IDWModel(neighbours=2),
         residuals,
         distances,
     )
@@ -63,10 +69,10 @@ def test_idw_requires_single_lambda_distance_field():
         coords={"id": ["a", "b"]},
     )
 
-    with pytest.raises(ValueError, match="single lambda"):
-        InverseDistanceWeighting(neighbours=1).interpolate(residuals, distances)
+    with pytest.raises(ValueError, match="select lambda/time"):
+        _predict(IDWModel(neighbours=1), residuals, distances)
 
-    result = InverseDistanceWeighting(neighbours=1).interpolate(residuals, distances.sel(lam_value=1.0))
+    result = _predict(IDWModel(neighbours=1), residuals, distances.sel(lam_value=1.0))
 
     assert result.dims == ("y", "x")
     assert float(result.sel(y=0.0, x=0.0)) == pytest.approx(20.0)

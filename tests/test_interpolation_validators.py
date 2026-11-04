@@ -1,17 +1,11 @@
-"""Contract checks isolated from package exports during the model refactor."""
-
-from pathlib import Path
-import runpy
+"""Checks for the shared xarray model contract."""
 
 import numpy as np
 import pytest
 import xarray as xr
 
 
-# Normal package imports still depend on the old vertical model names.
-base = runpy.run_path(str(Path(__file__).resolve().parents[1] / "src/interpolate/models/base.py"))
-Model = base["InterpolationModel"]
-Fitted = base["FittedInterpolationModel"]
+from src.interpolate.models.base import InterpolationModel as Model, FittedInterpolationModel as Fitted
 
 
 @pytest.fixture

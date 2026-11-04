@@ -18,9 +18,9 @@ from src.api.schemas import InterpolationRequest
 from src.coordinator import InterpolationCoordinator, PreparedInterpolationRun
 from src.interpolate.cv import CrossValidationResult
 from src.interpolate.distance import DistanceField
-from src.interpolate.idw import InverseDistanceWeighting
+from src.interpolate.models import IDWModel
 from src.interpolate.interpolator import InterpolationJob, Interpolator
-from src.interpolate.vertical import LinearVerticalModel
+from src.interpolate.models import LinearLapseRateModel
 from src.meteo.resample import MeteoResampler
 from src.config import CrossValidationConfig
 from src.worker import process_interpolation_job
@@ -59,8 +59,8 @@ def _result(timestamp="2026-10-25", *, residuals=False, lambda_dimension=True, c
         distances = DistanceField("test_distance", data)
     result = process_interpolation_job(
         job, Interpolator(
-            LinearVerticalModel(), InverseDistanceWeighting(neighbours=1) if residuals else None,
-        ), CrossValidationConfig(), grid, distances,
+            LinearLapseRateModel(), IDWModel(neighbours=1) if residuals else None,
+        ), CrossValidationConfig(), grid.to_dataset(), distances,
     )
     assert result.status == "completed", result.error
     return result, grid
@@ -80,9 +80,9 @@ def test_daily_output_round_trip_preserves_values_time_and_selected_metadata(tmp
         assert ds.time.values[0] == start.tz_localize(None).to_datetime64()
         assert ds.attrs["request_metadata"]["dem_path"] == "dem.tif"
         assert ds.attrs["request_metadata"]["resampling"]["min_coverage"] == .7
-        model = ds.attrs["model_metadata"]["vertical_model"]
-        assert model["type"] == "linear"
-        assert model["fitted_parameters"]["coef"] == pytest.approx([1.5])
+        model = ds.attrs["model_metadata"]["primary_model"]
+        assert model["type"] == "linear_lapse_rate"
+        assert model["settings"] == {"kwargs": {}}
         assert ds.attrs["job_metadata"]["training_stations"] == ["a", "b", "c"]
         assert ds.attrs["job_metadata"]["parameter"] == "tair_2m"
         assert ds.attrs["job_metadata"]["n_observations"] == 3
@@ -134,7 +134,7 @@ def test_output_crs_round_trip_with_default_xarray_reader(tmp_path, crs, residua
             assert ds.attrs["crs_epsg"] == f"EPSG:{CRS.from_user_input(crs).to_epsg()}"
         assert ds.rio.bounds() == grid.rio.bounds()
     with xr.open_zarr(path, decode_coords="all", consolidated=False) as ds:
-        for name in ("tair_2m", "tair_2m_vertical", "tair_2m_residuals"):
+        for name in ("tair_2m", "tair_2m_primary", "tair_2m_residuals"):
             if name in ds:
                 assert CRS.from_user_input(ds[name].rio.crs) == CRS.from_user_input(crs)
 
@@ -143,7 +143,7 @@ def test_output_requires_crs_and_does_not_publish_a_partial_store(tmp_path):
     result, _ = _result()
     prediction = replace(result.prediction,
         prediction=result.prediction.prediction.drop_vars("spatial_ref"),
-        vertical_prediction=result.prediction.vertical_prediction.drop_vars("spatial_ref"),
+        primary_prediction=result.prediction.primary_prediction.drop_vars("spatial_ref"),
     )
     with pytest.raises(ValueError, match="must define a CRS"):
         write_job_result(replace(result, prediction=prediction), tmp_path, "request", {"freq": "D"})
@@ -226,7 +226,7 @@ def test_coordinator_passes_processing_metadata_to_output(tmp_path):
     result, grid = _result()
     context = SimpleNamespace(
         output_dir=tmp_path, resampler=MeteoResampler(min_coverage=.7), gapfiller=None,
-        config={"interpolation": {}},
+        config={"interpolation": {}, "distance": {"type": "test_distance"}},
         dem=SimpleNamespace(path=Path("dem.tif"), fingerprint="dem-identity"),
     )
     coordinator = InterpolationCoordinator(context)
@@ -242,6 +242,7 @@ def test_coordinator_passes_processing_metadata_to_output(tmp_path):
         assert metadata["resampling"]["source_frequency"] == "h"
         assert not metadata["gapfilling"]["enabled"]
         assert metadata["dem_fingerprint"] == "dem-identity"
+        assert metadata["distance"] == {"type": "test_distance"}
     coordinator._validate_dates(request.start, request.end)
 
 

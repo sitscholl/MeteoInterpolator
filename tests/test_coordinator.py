@@ -212,7 +212,7 @@ def test_request_frequency_controls_jobs_without_changing_shared_state(monkeypat
             prepared = await coordinator._prepare_request(request)
             assert len(prepared.jobs) == count
             assert prepared.jobs[0].observations["tair_2m"].tolist() == [first_value]
-            assert prepared.prediction_target is dem.data
+            xr.testing.assert_identical(prepared.prediction_target["elevation"], dem.data.rename("elevation"))
 
     asyncio.run(prepare_requests())
     pd.testing.assert_frame_equal(station.data, original_data)

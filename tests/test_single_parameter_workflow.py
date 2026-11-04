@@ -71,14 +71,15 @@ def test_build_jobs_is_single_parameter_and_end_exclusive():
 
     assert len(jobs) == 1
     job = jobs[0]
-    y, X, x_coords, y_coords, ids = job.to_arrays()
+    X, y = job.to_arrays()
     assert job.timestamp == pd.Timestamp("2026-05-13", tz=tz)
     assert job.training_points.crs.to_epsg() == 4326
-    assert X.shape == (3, 1)
-    assert y.tolist() == [10.0, 9.0, 8.0]
-    assert x_coords.tolist() == [11.0, 11.1, 11.2]
-    assert y_coords.tolist() == [46.0, 46.1, 46.2]
-    assert ids.tolist() == ["a", "b", "c"]
+    assert X.elevation.dims == ("id",)
+    assert X.elevation.values.tolist() == [1000., 1200., 1400.]
+    assert y.values.tolist() == [10.0, 9.0, 8.0]
+    assert X.x.values.tolist() == [11.0, 11.1, 11.2]
+    assert X.y.values.tolist() == [46.0, 46.1, 46.2]
+    assert X.id.values.tolist() == ["a", "b", "c"]
 
 
 def test_update_elevation_fills_missing_values_from_dem_by_default():
