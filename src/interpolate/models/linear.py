@@ -9,15 +9,12 @@ from .base import FittedInterpolationModel, InterpolationModel
 
 @dataclass(frozen=True)
 class FittedLinearLapseRateModel(FittedInterpolationModel):
+    required_predictors = ('elevation',)
+
     coef: tuple[float, ...]
     intercept: float
 
     def _predict(self, targets: xr.Dataset, distances=None):
-        if not isinstance(targets, xr.Dataset):
-            raise TypeError(f"X must be an xarray Dataset. Got {type(targets)}")
-        if not 'elevation' in targets.data_vars:
-            raise ValueError(f"LinearLapseRateModel Targets require a variable called 'elevation'. Got {targets.data_vars}")
-        
         X = np.asarray(targets['elevation'].values)
         original_shape = X.shape
         X_2d = X.reshape(-1, 1)
@@ -27,8 +24,8 @@ class FittedLinearLapseRateModel(FittedInterpolationModel):
 
         return xr.DataArray(
             data=preds,
-            coords=targets.coords,
-            dims=targets.dims,
+            coords=targets['elevation'].coords,
+            dims=targets['elevation'].dims,
             name="LinearLapseRate predictions",
             attrs={
                 "description": "Linear lapse rate predictions.",
@@ -49,7 +46,7 @@ class LinearLapseRateModel(InterpolationModel):
         X, y = self._validate_training_data(X, y, required_predictors=('elevation',))
 
         estimator = LinearRegression(**self.kwargs)
-        estimator.fit(X['elevation'], y)
+        estimator.fit(X['elevation'].reshape(-1, 1), y)
         return FittedLinearLapseRateModel(
             coef=tuple(float(value) for value in np.ravel(estimator.coef_)),
             intercept=float(estimator.intercept_),

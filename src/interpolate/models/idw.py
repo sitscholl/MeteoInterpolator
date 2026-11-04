@@ -10,33 +10,19 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class FittedIDWModel(FittedInterpolationModel):
+    y: xr.DataArray
     neighbours: int
     weight_exponent: float
     
     def _predict(self, targets: xr.Dataset, distances: xr.DataArray | None = None):
-        if not isinstance(targets, xr.Dataset):
-            raise TypeError(f"X must be an xarray Dataset. Got {type(targets)}")
-        self._validate_distances(distances)
 
-        distance_ids = set(distances.id.values)
-        common_ids = [pid for pid in targets.id.values if pid in distance_ids]
-        if len(common_ids) == 0:
-            logger.warning("No common ids between y input and distance_fields array. y-values cannot be interpolated")
-            return None
+        ##Filters for source ids and raises on missing ids
+        distances = self._validate_distances(distances, self.y.id.values, targets)
 
-        missing_ids = set(targets.id.values) - set(distances.id.values)
-        if len(missing_ids) > 0:
-            logger.warning(f"No distance fields for the following ids were provided. They will not be considered in the interpolation: {missing_ids}")
-        
-        y = targets.sel(id = common_ids)
-        distance_field = distances.sel(id = common_ids)
-
-        output_dims = tuple(dim for dim in distance_field.dims if dim != "id")
-        distances = distance_field.transpose("id", *output_dims)
         distance_values = np.asarray(distances.values, dtype=float)
-        residual_values = np.asarray(y.values, dtype=float)
+        residual_values = np.asarray(self.y.values, dtype=float)
 
-        n_stations = len(common_ids)
+        n_stations = len(distances.id.values)
         n_neighbours = min(self.neighbours, n_stations)
         broadcast_shape = (n_stations,) + (1,) * (distance_values.ndim - 1)
         residual_values = residual_values.reshape(broadcast_shape)
@@ -77,17 +63,16 @@ class FittedIDWModel(FittedInterpolationModel):
         )
         interpolated = np.where(zero_count > 0, exact_values, interpolated)
 
-        coords = {dim: distances.coords[dim] for dim in output_dims if dim in distances.coords}
         return xr.DataArray(
             interpolated,
-            dims=output_dims,
-            coords=coords,
+            dims=targets.dims,
+            coords=targets.coors,
             name="IDWModel predictions",
             attrs={
                 "description": "Inverse distance weighted predictions.",
                 "neighbours": n_neighbours,
                 "weight_exponent": self.weight_exponent,
-                "distance_type": distance_field.attrs.get("distance_type"),
+                "distance_type": distances.attrs.get("distance_type"),
             },
         )
 
@@ -105,6 +90,10 @@ class IDWModel(InterpolationModel):
         self.neighbours = neighbours
         self.weight_exponent = float(weight_exponent)
 
+    @classmethod
+    def key(cls) -> str:
+        return "inverse distance weighting"
+
     @property
     def requires_distances(self):
         return True
@@ -114,6 +103,7 @@ class IDWModel(InterpolationModel):
         X, y = self._validate_training_data(X, y)
 
         return FittedIDWModel(
+            y = y.copy(),
             neighbours = self.neighbours,
             weight_exponent = self.weight_exponent,
         )

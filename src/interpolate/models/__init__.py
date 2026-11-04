@@ -1,12 +1,15 @@
-from .base import BaseFittedVerticalModel, BaseVerticalModel
-from .linear import LinearVerticalFit, LinearVerticalModel
-from .nonlinear import NonLinearVerticalFit, NonLinearVerticalModel
+from .base import FitterInterpolationModel, InterpolationModel
+from .idw import FittedIDWModel, IDWModel
+from .linear import FittedLinearLapseRateModel, LinearLapseRateModel
+from .nonlinear import FittedNonLinearLapseRateModel, NonLinearLapseRateModel
 
 __all__ = [
-    "BaseFittedVerticalModel",
-    "BaseVerticalModel",
-    "LinearVerticalFit",
-    "LinearVerticalModel",
-    "NonLinearVerticalFit",
-    "NonLinearVerticalModel",
+    "FittedIDWModel",
+    "FittedLinearLapseRateModel",
+    "FittedNonLinearLapseRateModel",
+    "FitterInterpolationModel",
+    "IDWModel",
+    "InterpolationModel",
+    "LinearLapseRateModel",
+    "NonLinearLapseRateModel",
 ]

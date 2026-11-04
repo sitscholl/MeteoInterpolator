@@ -60,14 +60,11 @@ def _calculate_nonlinear_profile(elevation, t0, gamma, a, h0, h1):
 
 @dataclass(frozen=True)
 class FittedNonLinearLapseRateModel(FittedInterpolationModel):
+    required_predictors = ('elevation',)
+
     parameters: NonLinearProfileParams
 
     def _predict(self, targets: xr.Dataset, distances=None):
-        if not isinstance(targets, xr.Dataset):
-            raise TypeError(f"X must be an xarray Dataset. Got {type(targets)}")
-        if not 'elevation' in targets.data_vars:
-            raise ValueError(f"LinearLapseRateModel Targets require a variable called 'elevation'. Got {targets.data_vars}")
-        
         X = np.asarray(targets['elevation'].values)
         original_shape = X.shape
         X_2d = X.reshape(-1, 1)
@@ -84,8 +81,8 @@ class FittedNonLinearLapseRateModel(FittedInterpolationModel):
 
         return xr.DataArray(
             data=preds,
-            coords=targets.coords,
-            dims=targets.dims,
+            coords=targets['elevation'].coords,
+            dims=targets['elevation'].dims,
             name="NonLinearLapseRate predictions",
             attrs={
                 "description": "Non linear lapse rate predictions.",
@@ -140,7 +137,8 @@ class NonLinearLapseRateModel(InterpolationModel):
             fit_X = X
             fit_y = y
 
-        linear_fit = LinearLapseRateModel().fit(fit_X.reshape(-1, 1), fit_y)
+        fit_X = xr.Dataset({"elevation": fit_X})
+        linear_fit = LinearLapseRateModel().fit(fit_X, fit_y)
         t0 = float(linear_fit.intercept)
         gamma = float(-linear_fit.coef[0])
         return NonLinearProfileParams(t0, gamma, 0.0, 500.0, 1500.0)
@@ -148,22 +146,16 @@ class NonLinearLapseRateModel(InterpolationModel):
     def fit(self, X: xr.Dataset, y: xr.DataArray):
         X, y = self._validate_training_data(X, y, required_predictors=('elevation',))
 
-        X = np.asarray(X['elevation'], dtype=float).reshape(-1)
-        y = np.asarray(y, dtype=float).reshape(-1)
-
-        if X.shape[0] != y.shape[0]:
+        if X['elevation'].shape[0] != y['elevation'].shape[0]:
             raise ValueError(f"X and y must contain the same number of samples. Got {X.shape[0]} and {y.shape[0]}.")
 
-        valid = np.isfinite(X) & np.isfinite(y)
-        if not valid.all():
-            logger.warning("Input contains non-finite values. Dropping invalid samples before fitting.")
-            X = X[valid]
-            y = y[valid]
+        params = self._get_initial_params(X, y)
 
+        X = np.asarray(X['elevation'], dtype=float).reshape(-1)
         if X.size < 5:
             raise ValueError(f"Nonlinear lapse-rate model requires at least five valid samples. Got {X.size}.")
 
-        params = self._get_initial_params(X, y)
+        y = np.asarray(y, dtype=float).reshape(-1)
         sigma = np.ones_like(y)
 
         ##todo: Handle failed fit. Raise error? or return None?
