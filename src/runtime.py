@@ -144,10 +144,9 @@ class RuntimeContext:
 
             ## Check Cross Validation Requirements
             if self.cross_validation.enabled:
-                if self.interpolator.residual_model is None:
+                if not self.interpolator.requires_distances:
                     raise ValueError(
-                        "Cross validation tunes lam_value for residual interpolation, "
-                        "but no residual model is configured."
+                        "Enabling cross validation tunes lambda values and therefore requires a distance dependent interpolation model. Disable cv to interpolate without such a model."
                     )
                 if self.distance_calculator is None:
                     raise ValueError(
@@ -188,9 +187,6 @@ class RuntimeContext:
             distance_fields_required = self.cross_validation.enabled or self.interpolator.requires_distances
             self.distance_fields = None
             if distance_fields_required:
-                if self.interpolator.residual_model is None:
-                    raise ValueError("Distance field required but no residual model available.")
-
                 self.distance_fields = self.load_cached_distance_fields()
                 if self.distance_fields is None:
                     logger.warning("No cached distance fields available but required by configuration. Interpolation will be disabled")
@@ -212,7 +208,7 @@ class RuntimeContext:
             else:
                 logger.info("Gapfiller initialized")
             
-            if distance_fields_required and self.distance_fields is None:
+            if self.interpolator.requires_distances and self.distance_fields is None:
                 self.interpolation_status = InterpolationStatus(enabled = False, reason='No distance fields available.')
             else:
                 self.interpolation_status = InterpolationStatus(enabled = True)

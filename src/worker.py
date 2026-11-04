@@ -79,7 +79,7 @@ def process_interpolation_job(
     job: InterpolationJob,
     interpolator: Interpolator,
     cross_validation_config: CrossValidationConfig,
-    prediction_target: xr.DataArray,
+    prediction_target: xr.Dataset,
     distance_fields: DistanceField | None,
 ) -> InterpolationJobResult:
     logger.debug('Starting %s', job)
@@ -122,11 +122,14 @@ def process_interpolation_job(
                 cross_validation_config.select_by,
                 best_score,
             )
+        else:
+            if 'lam_value' in distance_fields.coords and distance_fields.sizes['lam_value'] > 1:
+                logger.warning("Multiple lam_values present in distance_fields, but cv is disables. First lam_value is used for interpolation.")
+                distance_fields = distance_fields.isel(lam_value = 0)
 
-        fitted = interpolator.fit(job)
-        prediction_result = interpolator.predict(
-            fitted,
-            prediction_target,
+        prediction_result = interpolator.run(
+            job=job,
+            targets=prediction_target,
             distance_fields=distance_fields,
             **best_params,
         )
@@ -137,12 +140,11 @@ def process_interpolation_job(
             prediction = prediction_result,
             cv_result = cv_result,
             status = 'completed',
-            stats = fitted.residual_summary,
+            stats = prediction_result.residual_summary(),
             model_metadata = to_jsonable({
-                "vertical_model": {
-                    "type": interpolator.vertical_model.key(),
-                    "settings": vars(interpolator.vertical_model),
-                    "fitted_parameters": asdict(fitted.vertical_fit),
+                "primary_model": {
+                    "type": interpolator.primary_model.key(),
+                    "settings": vars(interpolator.primary_model),
                 },
                 "residual_model": {
                     "configured": interpolator.residual_model is not None,

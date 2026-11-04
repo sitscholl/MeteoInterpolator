@@ -4,13 +4,12 @@ import asyncio
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
-import geopandas as gpd
 import pandas as pd
 import rioxarray  # noqa: F401
 import xarray as xr
@@ -23,10 +22,9 @@ from .interpolate import InterpolationJob
 from .meteo import retrieve_stations
 from .meteo.ingest import _INGESTION_FREQ
 from .runtime import RuntimeContext
-from .utils import get_date_format_from_freq, to_utc_timestamp
+from .utils import get_date_format_from_freq, to_jsonable, to_utc_timestamp
 from .worker import InterpolationJobResult, process_interpolation_job
 from .write import write_job_result
-from .utils import to_jsonable
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +34,7 @@ RunStatus = Literal["queued", "running", "completed", "failed"]
 
 @dataclass(frozen=True)
 class PreparedInterpolationRun:
-    prediction_target: xr.DataArray
+    prediction_target: xr.Dataset
     jobs: list[InterpolationJob]
 
 
@@ -133,7 +131,7 @@ class InterpolationCoordinator:
         )
 
         return PreparedInterpolationRun(
-            prediction_target=prediction_target,
+            prediction_target=prediction_target.to_dataset(name = 'elevation'),
             jobs=jobs,
         )
 
