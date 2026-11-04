@@ -7,7 +7,8 @@ from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, status as http_status
+from fastapi import FastAPI, HTTPException, Request
+from fastapi import status as http_status
 from fastapi.responses import JSONResponse
 from pandas import Timedelta
 
@@ -43,7 +44,9 @@ async def lifespan(app: FastAPI):
     if not Path(config_path).exists():
         raise FileNotFoundError(f"Invalid configuration file {config_path}")
 
-    runtime = await RuntimeContext.from_config_file(config_path)
+    runtime = await asyncio.to_thread(
+        RuntimeContext.from_config_file, config_path
+    )
 
     coordinator = None
     scheduler = None
