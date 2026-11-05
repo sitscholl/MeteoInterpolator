@@ -91,7 +91,7 @@ def process_interpolation_job(
     prediction_target: xr.Dataset,
     distance_fields: DistanceField | None,
 ) -> InterpolationJobResult:
-    logger.debug('Starting %s', job)
+    logger.info('Starting %s', job)
 
     if len(job.observations) < interpolator.min_sample_size:
         logger.warning(

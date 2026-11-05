@@ -177,8 +177,6 @@ def cross_validate(
 
         rows = []
         for i, (train_index, test_index) in enumerate(cv_folds):
-            logger.debug("Testing fold %s", i)
-
             try:
                 train_obs = observations.iloc[train_index].copy()
                 test_obs = observations.iloc[test_index].copy()
