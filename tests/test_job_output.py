@@ -217,7 +217,7 @@ def test_cv_metadata_with_numpy_scalars_round_trips(tmp_path):
     result, _ = _result()
     cv = CrossValidationResult(pd.DataFrame({
         "lam_value": [0, 0, 1, 1], "observed": [1., 2., 1., 2.],
-        "predicted": [1., 2., 1.5, 2.5],
+        "predicted": [1., 2., 1.5, 2.5], "stalled": [False, False, True, True]
     }), {"lam_value": [np.int64(0), np.int64(1)]}, 2, False, "rmse")
     path = write_job_result(replace(result, cv_result=cv), tmp_path, "request", {
         "freq": "D", "timezone": "Europe/Rome",

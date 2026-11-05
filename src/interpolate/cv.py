@@ -63,7 +63,7 @@ class CrossValidationResult:
     selection_metric: str
 
     def __post_init__(self):
-        required_cols = [*list(self.param_grid.keys()), 'observed', 'predicted']
+        required_cols = [*list(self.param_grid.keys()), 'observed', 'predicted', 'stalled']
         for c in required_cols:
             if c not in self.fold_results.columns:
                 raise ValueError(f"Missing column {c} in fold results. Got {self.fold_results.columns}")
@@ -72,7 +72,16 @@ class CrossValidationResult:
             if any(i is None for i in param_values):
                 raise ValueError("The parameter grid cannot contain None values for any parameter")
 
-    def calculate_fold_scores(self, metric: str | None = None):
+    def calculate_fold_scores(self, metric: str | None = None, include_stalled: bool = False):
+        """Score evaluated parameter combinations using the requested metric.
+
+        The metric defaults to selection_metric. Stalled candidates are excluded
+        by default. Their flags were determined during the search using the
+        original selection_metric and improvement threshold; requesting another
+        metric does not recompute those flags. Set include_stalled=True to score
+        all evaluated candidates, including those that failed the threshold.
+        With no improvement threshold configured, no candidates are stalled.
+        """
 
         if metric is None:
             metric = self.selection_metric
@@ -81,11 +90,26 @@ class CrossValidationResult:
         if score_fn is None:
             raise ValueError(f"Unknown metric {metric}. Choose one of {_SCORING_FUNCTIONS.keys()}")
 
-        return self.fold_results.groupby(list(self.param_grid.keys())).apply(lambda x: score_fn(x['observed'], x['predicted']))
+        if include_stalled:
+            fold_results = self.fold_results
+        else:
+            fold_results = self.fold_results.loc[~self.fold_results['stalled']]
 
-    def get_best_parameters(self, metric: str | None = None):
+        return fold_results.groupby(list(self.param_grid.keys())).apply(lambda x: score_fn(x['observed'], x['predicted']))
 
-        fold_scores = self.calculate_fold_scores(metric)
+    def get_best_parameters(self, metric: str | None = None, include_stalled: bool = False):
+        """Return the parameters with the lowest requested score and that score.
+
+        By default, select among candidates accepted using the search's original
+        selection_metric and improvement threshold, even when metric overrides
+        the scoring metric. For example, after an RMSE search,
+        get_best_parameters("mae") minimizes MAE among those accepted candidates;
+        get_best_parameters("mae", include_stalled=True) minimizes MAE among all
+        evaluated candidates. Neither call evaluates untested parameters.
+        Return ({}, None) if no candidates remain after filtering.
+        """
+
+        fold_scores = self.calculate_fold_scores(metric, include_stalled=include_stalled)
         if fold_scores.empty:
             return {}, None
 
@@ -192,22 +216,25 @@ def cross_validate(
                 raise
                         
         param_combination_results = pd.concat(rows)
-        results.append(param_combination_results)
-
-        if config.min_relative_score_improvement is None:
-            continue
-        else:
+        
+        if config.min_relative_score_improvement is not None:
             current_score = scoring_function(param_combination_results['observed'], param_combination_results['predicted'])
 
             if _is_marginal_improvement(current_score, best_param_score, min_improvement = config.min_relative_score_improvement):
                 logger.debug("Setting best score from %s to %s", best_param_score, current_score)
                 best_param_score = current_score
                 stalled_steps = 0
+                param_combination_results['stalled'] = False
             else:
                 stalled_steps += 1
                 logger.debug(
                     "No score improvement for parameter combination %s: %s (candidate) vs %s (current). Stalled steps: %s", 
                     param_combination, current_score, best_param_score, stalled_steps)
+                param_combination_results['stalled'] = True
+        else:
+            param_combination_results['stalled'] = False
+
+        results.append(param_combination_results)
         
         if stalled_steps >= config.improvement_latency_steps:
             logger.debug("Stopping parameter search because improvement latency has been reached at score %s", best_param_score)
