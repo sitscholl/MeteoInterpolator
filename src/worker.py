@@ -38,7 +38,7 @@ class InterpolationJobResult:
         job_metadata = {
             'parameter': self.job.parameter,
             'n_observations': len(self.job.observations),
-            'training_stations': self.prediction.station_ids,
+            # 'training_stations': self.prediction.station_ids,
             'n_training_points': len(self.job.training_points),
         }
 
@@ -67,7 +67,16 @@ class InterpolationJobResult:
         time_value = timestamp.tz_localize(None).to_datetime64()
         ds = ds.expand_dims(time=[time_value])
 
-        ds.attrs['lam_value'] = self.prediction.lam_value
+        ds["lam_value"] = ("time", [
+            self.prediction.lam_value
+            if self.prediction.lam_value is not None else float("nan")
+        ])
+        ds["cv_best_score"] = ("time", [
+            best_score
+            if self.cv_result is not None and best_score is not None
+            else float("nan")
+        ])
+
         ds.attrs['residuals_interpolated'] = self.prediction.used_residuals
         ds.attrs['job_metadata'] = to_jsonable(job_metadata)
         ds.attrs['cv_metadata'] = to_jsonable(cv_metadata)
