@@ -79,8 +79,9 @@ class InterpolationCoordinator:
     def __post_init__(self) -> None:
         self._runs: dict[str, InterpolationRunState] = {}
         self._tasks: dict[str, asyncio.Task] = {}
+        self._run_lock = asyncio.Lock()
 
-    async def _prepare_request(self, request: InterpolationRequest) -> PreparedInterpolationRun:
+    def _prepare_request(self, request: InterpolationRequest) -> PreparedInterpolationRun:
 
         if request.freq not in ['D', 'h']:
             raise ValueError(f"freq must be one of 'D' or 'h'. Got {request.freq}")
@@ -140,13 +141,29 @@ class InterpolationCoordinator:
         request: InterpolationRequest,
         request_id: str | None = None,
     ) -> InterpolationRunResult:
+        # Preparation, interpolation and output writing are all synchronous.
+        # Serialize runs because they share the runtime's interpolator and data.
+        async with self._run_lock:
+            work = asyncio.create_task(asyncio.to_thread(self._run, request, request_id))
+            try:
+                return await asyncio.shield(work)
+            except asyncio.CancelledError:
+                # A thread cannot be cancelled: retain the lock until it exits.
+                await work
+                raise
+
+    def _run(
+        self,
+        request: InterpolationRequest,
+        request_id: str | None = None,
+    ) -> InterpolationRunResult:
 
         if request.param != 'tair_2m':
             raise NotImplementedError(f"Interpolation is currently only implemented for parameter 'tair_2m'. Got {request.param}")
 
         logger.info("Preparing %s", request)
         request_id = request_id or str(uuid4())
-        prepared = await self._prepare_request(request)
+        prepared = self._prepare_request(request)
 
         resampler = self.context.resampler
         named_aggs = resampler._prepare_named_aggs([request.param], resampler.default_aggfunc)
@@ -293,8 +310,6 @@ class InterpolationCoordinator:
     async def shutdown(self) -> None:
         tasks = list(self._tasks.values())
 
-        for task in tasks:
-            task.cancel()
-
+        # Keep runtime resources open until the background threads finish.
         await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
