@@ -91,17 +91,80 @@ def test_daily_output_round_trip_preserves_values_time_and_selected_metadata(tmp
     assert path.name == f"tair_2m_D_{start:%Y%m%dT%H%M%SZ}.zarr"
 
 
+@pytest.mark.parametrize(
+    "day,timezone,start,end,hours",
+    [
+        ("2026-01-01", "Europe/Rome", "2025-12-31T23:00:00", "2026-01-01T23:00:00", 24),
+        ("2026-05-13", "Europe/Rome", "2026-05-12T22:00:00", "2026-05-13T22:00:00", 24),
+        ("2026-03-29", "Europe/Rome", "2026-03-28T23:00:00", "2026-03-29T22:00:00", 23),
+        ("2026-10-25", "Europe/Rome", "2026-10-24T22:00:00", "2026-10-25T23:00:00", 25),
+        ("2026-01-01", "UTC", "2026-01-01T00:00:00", "2026-01-02T00:00:00", 24),
+        ("2026-01-01", "Asia/Kathmandu", "2025-12-31T18:15:00", "2026-01-01T18:15:00", 24),
+    ],
+)
+def test_daily_time_metadata_round_trips(tmp_path, day, timezone, start, end, hours):
+    result, _ = _result(day)
+    # Production jobs carry UTC timestamps, regardless of aggregation timezone.
+    timestamp = pd.Timestamp(day, tz=timezone).tz_convert("UTC")
+    result = replace(result, job=replace(result.job, timestamp=timestamp))
+    metadata = {"freq": "D", "timezone": timezone, "source": "test"}
+    path = write_job_result(result, tmp_path, "request", metadata)
+
+    assert metadata == {"freq": "D", "timezone": timezone, "source": "test"}
+    with xr.open_zarr(path, consolidated=False) as ds:
+        assert ds.attrs["aggregation_timezone"] == timezone
+        assert ds.attrs["aggregation_frequency"] == "D"
+        assert ds.attrs["request_metadata"]["source"] == "test"
+        assert ds.time.attrs["timezone"] == "UTC"
+        assert ds.time.attrs["long_name"] == "Start of aggregation interval"
+        assert ds.time.attrs["bounds"] == "time_bounds"
+        assert ds.local_date.dims == ("time",)
+        assert ds.local_date.values.tolist() == [day]
+        assert ds.local_date.attrs["timezone"] == timezone
+        assert ds.time_bounds.dims == ("time", "bounds")
+        assert ds.time_bounds.shape == (1, 2)
+        assert np.issubdtype(ds.time_bounds.dtype, np.datetime64)
+        expected = np.array([[start, end]], dtype="datetime64[ns]")
+        np.testing.assert_array_equal(ds.time_bounds.values, expected)
+        assert ds.time.values[0] == expected[0, 0]
+        assert ds.time_bounds.values[0, 1] - ds.time_bounds.values[0, 0] == np.timedelta64(hours, "h")
+
+
+@pytest.mark.parametrize("timezone_metadata", [{}, {"timezone": None}])
+def test_missing_aggregation_timezone_writes_without_daily_coordinates(tmp_path, caplog, timezone_metadata):
+    result, _ = _result()
+    with caplog.at_level("WARNING", logger="src.write"):
+        path = write_job_result(result, tmp_path, "request", {"freq": "D", **timezone_metadata})
+
+    assert "Aggregation timezone is None" in caplog.text
+    with xr.open_zarr(path, consolidated=False) as ds:
+        assert ds.attrs["aggregation_timezone"] is None
+        assert ds.attrs["aggregation_frequency"] == "D"
+        assert ds.time.attrs["timezone"] == "UTC"
+        assert "local_date" not in ds.variables
+        assert "time_bounds" not in ds.variables
+        assert "bounds" not in ds.time.attrs
+
+
 def test_repeated_hour_outputs_have_distinct_utc_timestamps_and_names(tmp_path):
     result, _ = _result()
     paths = []
     for timestamp in ("2026-10-25T02:00:00+02:00", "2026-10-25T02:00:00+01:00"):
         hourly = replace(result, job=replace(result.job, timestamp=pd.Timestamp(timestamp)))
-        paths.append(write_job_result(hourly, tmp_path, "request", {"freq": "h"}))
+        paths.append(write_job_result(hourly, tmp_path, "request", {
+            "freq": "h", "timezone": "Europe/Rome",
+        }))
     assert paths[0].name == "tair_2m_h_20261025T000000Z.zarr"
     assert paths[1].name == "tair_2m_h_20261025T010000Z.zarr"
     for path, expected in zip(paths, ["2026-10-25T00:00:00", "2026-10-25T01:00:00"]):
         with xr.open_zarr(path, consolidated=False) as ds:
             assert ds.time.values[0] == np.datetime64(expected)
+            assert ds.time.attrs["timezone"] == "UTC"
+            assert ds.attrs["aggregation_timezone"] == "Europe/Rome"
+            assert ds.attrs["aggregation_frequency"] == "h"
+            assert "local_date" not in ds.variables
+            assert "time_bounds" not in ds.variables
+            assert "bounds" not in ds.time.attrs
 
 
 @pytest.mark.parametrize("lambda_dimension", [True, False])

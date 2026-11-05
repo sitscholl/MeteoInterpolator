@@ -5,6 +5,8 @@ from pathlib import Path
 from time import sleep
 from uuid import uuid4
 
+from pandas import DateOffset, Timestamp
+
 from .array.crs import attach_crs_metadata
 from .utils import to_jsonable, to_utc_timestamp
 from .worker import InterpolationJobResult
@@ -24,6 +26,45 @@ def _publish_store(partial_filename: Path, out_filename: Path) -> None:
             if os.name != "nt" or attempt == 4:
                 raise
             sleep(.05 * 2 ** attempt)
+
+def attach_request_metadata(ds, timestamp, metadata):
+
+    metadata = dict(metadata)
+    aggregation_timezone = metadata.pop('timezone') if 'timezone' in metadata else None
+    aggregation_frequency = metadata.pop('freq') if 'freq' in metadata else None
+    
+    ds.attrs['request_metadata'] = to_jsonable(metadata)
+    ds.attrs.update({
+        "aggregation_timezone": aggregation_timezone,
+        "aggregation_frequency":aggregation_frequency,
+    })
+
+    if 'time' in ds.coords:
+        ds.time.attrs.update({
+            "timezone": "UTC",
+            "long_name": "Start of aggregation interval",
+        })
+
+    if aggregation_timezone is None:
+        logger.warning("Aggregation timezone is None; output zarr files will have limited metadata.")
+
+    if aggregation_timezone is not None and aggregation_frequency == 'D':
+        local_timestamp = Timestamp(timestamp).tz_convert(aggregation_timezone)
+        next_timestamp = local_timestamp + DateOffset(days=1)
+
+        ds = ds.assign_coords(local_date=("time", [local_timestamp.strftime("%Y-%m-%d")]))
+        ds.local_date.attrs.update({
+            "long_name": "Local calendar date of the daily aggregation",
+            "timezone": aggregation_timezone,
+        })
+
+        time_bounds = [
+            (local_timestamp.tz_convert('UTC').tz_localize(None), next_timestamp.tz_convert('UTC').tz_localize(None))
+            ]
+        ds = ds.assign_coords(time_bounds=(('time', 'bounds'), time_bounds))
+        ds.time.attrs["bounds"] = "time_bounds"
+
+    return ds
 
 def write_job_result(
     result: InterpolationJobResult,
@@ -55,8 +96,10 @@ def write_job_result(
         ds = result.to_dataset()
         if ds.rio.crs is None:
             raise ValueError("Output dataset must define a CRS.")
+
         ds = attach_crs_metadata(ds, ds.rio.crs)
-        ds.attrs['request_metadata'] = to_jsonable(metadata)
+        ds = attach_request_metadata(ds, result.job.timestamp, metadata)
+
         ds.attrs = to_jsonable(ds.attrs)
         for name in ds.variables:
             ds[name].attrs = to_jsonable(ds[name].attrs)
