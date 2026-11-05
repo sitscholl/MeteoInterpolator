@@ -1,4 +1,5 @@
 import asyncio
+import threading
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -9,7 +10,7 @@ import pytest
 import xarray as xr
 from shapely.geometry import Point
 
-from src.coordinator import InterpolationCoordinator
+from src.coordinator import InterpolationCoordinator, InterpolationRunResult
 from src.api.schemas import InterpolationRequest
 from src.domain.dem import DEM
 from src.interpolate import DistanceField
@@ -209,7 +210,7 @@ def test_request_frequency_controls_jobs_without_changing_shared_state(monkeypat
                 "param": "tair_2m", "start": "2026-01-01", "end": "2026-01-02",
                 "timezone": "UTC", "freq": freq,
             })
-            prepared = await coordinator._prepare_request(request)
+            prepared = coordinator._prepare_request(request)
             assert len(prepared.jobs) == count
             assert prepared.jobs[0].observations["tair_2m"].tolist() == [first_value]
             xr.testing.assert_identical(prepared.prediction_target["elevation"], dem.data.rename("elevation"))
@@ -217,3 +218,49 @@ def test_request_frequency_controls_jobs_without_changing_shared_state(monkeypat
     asyncio.run(prepare_requests())
     pd.testing.assert_frame_equal(station.data, original_data)
     assert coordinator.context.resampler.min_coverage == 1.0
+
+
+@pytest.mark.parametrize("cancel_first", [False, True])
+def test_runs_share_runtime_serially_until_worker_finishes(monkeypatch, cancel_first):
+    coordinator = InterpolationCoordinator(SimpleNamespace())
+    first_started = threading.Event()
+    release_first = threading.Event()
+    second_started = threading.Event()
+    request = InterpolationRequest(param="tair_2m", start="2026-01-01", end="2026-01-02")
+
+    def run(request, request_id):
+        if request_id == "first":
+            first_started.set()
+            if not release_first.wait(5):
+                raise TimeoutError("test did not release first run")
+        else:
+            second_started.set()
+        return InterpolationRunResult(request_id, request, [])
+
+    monkeypatch.setattr(coordinator, "_run", run)
+
+    async def check():
+        first = asyncio.create_task(coordinator.run(request, "first"))
+        second = None
+        try:
+            assert await asyncio.to_thread(first_started.wait, 1)
+            if cancel_first:
+                first.cancel()
+            second = asyncio.create_task(coordinator.run(request, "second"))
+            await asyncio.sleep(0)
+            assert coordinator._run_lock.locked()
+            assert not first.done()
+            assert not second_started.is_set()
+            release_first.set()
+            if cancel_first:
+                with pytest.raises(asyncio.CancelledError):
+                    await first
+            else:
+                await first
+            assert (await asyncio.wait_for(second, 2)).request_id == "second"
+            assert second_started.is_set()
+        finally:
+            release_first.set()
+            await asyncio.gather(*[task for task in (first, second) if task is not None], return_exceptions=True)
+
+    asyncio.run(check())

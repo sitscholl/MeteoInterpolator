@@ -3,7 +3,7 @@ import os
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import Mock
 from pyproj import CRS
 
 import geopandas as gpd
@@ -230,7 +230,7 @@ def test_coordinator_passes_processing_metadata_to_output(tmp_path):
         dem=SimpleNamespace(path=Path("dem.tif"), fingerprint="dem-identity"),
     )
     coordinator = InterpolationCoordinator(context)
-    coordinator._prepare_request = AsyncMock(return_value=PreparedInterpolationRun(grid, [result.job]))
+    coordinator._prepare_request = Mock(return_value=PreparedInterpolationRun(grid, [result.job]))
     coordinator._submit_jobs = lambda _: iter([result])
     request = InterpolationRequest(param="tair_2m", start="2026-10-25", end="2026-10-26")
     run = asyncio.run(coordinator.run(request, request_id="request"))
@@ -255,7 +255,7 @@ def test_submitted_run_streams_outputs_and_counts_all_job_statuses(tmp_path):
         config={}, dem=SimpleNamespace(path="dem.tif", fingerprint="dem-id"),
     )
     coordinator = InterpolationCoordinator(context)
-    coordinator._prepare_request = AsyncMock(return_value=PreparedInterpolationRun(grid, []))
+    coordinator._prepare_request = Mock(return_value=PreparedInterpolationRun(grid, []))
 
     def results(_):
         yield result
@@ -286,7 +286,7 @@ def test_coordinator_reports_write_failures_in_summary(tmp_path, monkeypatch):
         config={}, dem=SimpleNamespace(path="dem.tif", fingerprint="dem-id"),
     )
     coordinator = InterpolationCoordinator(context)
-    coordinator._prepare_request = AsyncMock(return_value=PreparedInterpolationRun(grid, []))
+    coordinator._prepare_request = Mock(return_value=PreparedInterpolationRun(grid, []))
     coordinator._submit_jobs = lambda _: iter([result])
 
     def fail_write(*args, **kwargs):
