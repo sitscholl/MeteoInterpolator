@@ -5,6 +5,7 @@ from pathlib import Path
 from time import sleep
 from uuid import uuid4
 
+import numpy as np
 from pandas import DateOffset, Timestamp
 
 from .array.crs import attach_crs_metadata
@@ -52,7 +53,11 @@ def attach_request_metadata(ds, timestamp, metadata):
         local_timestamp = Timestamp(timestamp).tz_convert(aggregation_timezone)
         next_timestamp = local_timestamp + DateOffset(days=1)
 
-        ds = ds.assign_coords(local_date=("time", [local_timestamp.strftime("%Y-%m-%d")]))
+        local_dates = np.array(
+            [local_timestamp.strftime("%Y-%m-%d")],
+            dtype=np.dtypes.StringDType(), #this fixes output compatibility warning when writing zarr files
+        )
+        ds = ds.assign_coords(local_date=("time", local_dates))
         ds.local_date.attrs.update({
             "long_name": "Local calendar date of the daily aggregation",
             "timezone": aggregation_timezone,
