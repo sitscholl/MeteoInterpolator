@@ -34,6 +34,7 @@ interpolation:
     fit_method: "trf"
     fit_initial_params: True
     initial_params_elev_threshold: 1500
+    allow_linear_fallback: True
 
   residual_model:
     type: inverse_distance_weighting
