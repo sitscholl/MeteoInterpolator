@@ -101,13 +101,17 @@ class NonLinearLapseRateModel(InterpolationModel):
         fit_initial_params: bool = True,
         initial_params_elev_threshold: float = 1500,
         initial_parameters: NonLinearProfileParams | None = None,
-        optimized_parameters: NonLinearProfileParams | None = None
+        optimized_parameters: NonLinearProfileParams | None = None,
+        maxfev: float = 5000,
+        allow_linear_fallback: bool = False,
         ):
         self.fit_method = fit_method
         self.fit_initial_params = fit_initial_params
         self.initial_params_elev_threshold = initial_params_elev_threshold
         self.initial_parameters = NonLinearProfileParams.from_config(initial_parameters)
         self.optimized_parameters = NonLinearProfileParams.from_config(optimized_parameters)
+        self.maxfev = maxfev
+        self.allow_linear_fallback = allow_linear_fallback
 
     @classmethod
     def key(cls):
@@ -155,21 +159,31 @@ class NonLinearLapseRateModel(InterpolationModel):
         
         params = self._get_initial_params(X, y)
         
-        y = np.asarray(y, dtype=float).reshape(-1)
-        sigma = np.ones_like(y)
+        x_arr = np.asarray(X["elevation"], dtype=float).reshape(-1)
+        y_arr = np.asarray(y, dtype=float).reshape(-1)
 
-        ##todo: Handle failed fit. Raise error? or return None?
-        x_arr = np.asarray(X['elevation'], dtype=float).reshape(-1)
-        popt, pcov = curve_fit(
-            _calculate_nonlinear_profile, 
-            x_arr, y, 
-            params.as_array(), 
-            method = self.fit_method, 
-            sigma = sigma, 
-            maxfev=5000
+        try:
+            popt, _ = curve_fit(
+                _calculate_nonlinear_profile,
+                x_arr,
+                y_arr,
+                params.as_array(),
+                method=self.fit_method,
+                maxfev=self.maxfev,
             )
+        except RuntimeError as exc:
+            if not self.allow_linear_fallback:
+                raise
 
-        return FittedNonLinearLapseRateModel(parameters=NonLinearProfileParams.from_array(popt))
+            logger.warning(
+                "Nonlinear fit failed (%s); using linear lapse rate.",
+                exc,
+            )
+            return LinearLapseRateModel().fit(X, y)
+
+        return FittedNonLinearLapseRateModel(
+            parameters=NonLinearProfileParams.from_array(popt),
+        )
 
 if __name__ == '__main__':
 
