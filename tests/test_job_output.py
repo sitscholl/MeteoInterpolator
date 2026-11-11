@@ -218,12 +218,14 @@ def test_cv_metadata_with_numpy_scalars_round_trips(tmp_path):
     cv = CrossValidationResult(pd.DataFrame({
         "lam_value": [0, 0, 1, 1], "observed": [1., 2., 1., 2.],
         "predicted": [1., 2., 1.5, 2.5], "stalled": [False, False, True, True]
-    }), {"lam_value": [np.int64(0), np.int64(1)]}, 2, False, "rmse")
+    }), {"lam_value": [np.int64(0), np.int64(1)]}, 2, False, "rmse", "cold-pool", 2)
     path = write_job_result(replace(result, cv_result=cv), tmp_path, "request", {
         "freq": "D", "timezone": "Europe/Rome",
     })
     with xr.open_zarr(path, consolidated=False) as ds:
         assert ds.attrs["cv_metadata"]["best_parameters"] == {"lam_value": 0}
+        assert ds.attrs["cv_metadata"]["cv_station_type"] == "cold-pool"
+        assert ds.attrs["cv_metadata"]["evaluated_stations"] == 2
 
 
 def test_numpy_metadata_round_trips_on_dataset_and_variables(tmp_path):

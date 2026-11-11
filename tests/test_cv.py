@@ -343,7 +343,6 @@ def test_cross_validate_rejects_invalid_options(options, location):
 
 
 @pytest.mark.parametrize("options,error,message", [
-    ({"n_splits": 5}, ValueError, "number of splits"),
     ({"distance_fields": None}, TypeError, "Distance fields must be"),
 ])
 def test_cross_validate_checks_job_requirements_after_config(options, error, message):
@@ -406,3 +405,131 @@ def test_cross_validate_stops_on_zero_score_plateau():
     assert result.search_stopped is True
     assert result.get_best_parameters() == ({"lam_value": 2}, 0)
     np.testing.assert_array_equal(result.calculate_fold_scores(include_stalled=True).values, [0, 0])
+
+
+@pytest.mark.parametrize("eligible_count", [0, 1])
+@pytest.mark.parametrize("cold_pool_only", [False, True])
+def test_cv_rejects_fewer_than_two_eligible_stations(monkeypatch, eligible_count, cold_pool_only):
+    from unittest.mock import Mock
+    interpolator, job, distances = _lambda_search_fixture()
+    if cold_pool_only:
+        job.observations["station_type"] = [
+            "cold-pool" if i < eligible_count else None for i in range(4)
+        ]
+    else:
+        job = _job(job.observations.iloc[:eligible_count].copy())
+    run = Mock()
+    monkeypatch.setattr(interpolator, "run", run)
+    with pytest.raises(ValueError, match=f"at least 2 eligible stations.*Got {eligible_count}"):
+        cross_validate(interpolator, job, {"lam_value": [0]}, distances,
+                       use_only_cold_pool=cold_pool_only)
+    run.assert_not_called()
+
+
+def test_cold_pool_cv_scores_only_eligible_stations_and_keeps_other_training(monkeypatch):
+    interpolator, job, distances = _lambda_search_fixture()
+    job.observations["station_type"] = ["cold-pool", None, "cold-pool", None]
+    original = interpolator.run
+    calls = []
+    def record(**kwargs):
+        training = set(kwargs["job"].observations.station_id)
+        held_out = set(kwargs["targets"].target_id.values)
+        assert training.isdisjoint(held_out)
+        assert {"b", "d"} <= training
+        calls.append((training, held_out))
+        return original(**kwargs)
+    monkeypatch.setattr(interpolator, "run", record)
+    result = cross_validate(interpolator, job, {"lam_value": [0, 2]}, distances,
+                            use_only_cold_pool=True)
+    assert len(calls) == 4
+    assert set(result.fold_results.test_id) == {"a", "c"}
+    assert result.get_best_parameters() == ({"lam_value": 2}, 0.)
+    assert result.cv_station_type == "cold-pool"
+    assert result.evaluated_stations == result.n_splits == 2
+
+
+@pytest.mark.parametrize("cold_pool_only", [False, True])
+def test_cv_caps_split_count_to_eligible_stations(caplog, cold_pool_only):
+    interpolator, job, distances = _lambda_search_fixture()
+    job.observations["station_type"] = ["cold-pool", None, "cold-pool", None]
+    result = cross_validate(interpolator, job, {"lam_value": [2]}, distances,
+                            n_splits=9, use_only_cold_pool=cold_pool_only)
+    assert result.n_splits == (2 if cold_pool_only else 4)
+    assert "n_splits is larger" in caplog.text
+
+
+def test_cold_pool_cv_rejects_insufficient_training_before_fitting(monkeypatch):
+    from unittest.mock import Mock
+    interpolator, job, distances = _lambda_search_fixture()
+    job.observations["station_type"] = ["cold-pool"] * 3 + [None]
+    run = Mock()
+    monkeypatch.setattr(interpolator, "run", run)
+    with pytest.raises(ValueError, match="3 samples are required.*Got 2 for fold 0"):
+        cross_validate(interpolator, job, {"lam_value": [0, 2]}, distances,
+                       n_splits=2, use_only_cold_pool=True)
+    run.assert_not_called()
+
+
+def test_catalog_to_worker_preserves_classification_and_tunes_subset(monkeypatch):
+    from src.database.db import InterpolationDB
+    from src.domain.meteo_data import MeteoData
+    from src.domain.schemas import _STATION_CATALOG_SCHEMA
+    from src.meteo.retrieve import retrieve_stations
+    from src.worker import process_interpolation_job
+
+    interpolator, source_job, distances = _lambda_search_fixture()
+    start = pd.Timestamp("2026-05-13", tz="UTC")
+    end = start + pd.Timedelta(hours=1)
+    catalog = pd.DataFrame({
+        "station_id": ["a", "b", "c", "d"], "name": ["a", "b", "c", "d"],
+        "longitude": [0., 1., 2., 3.], "latitude": [0.] * 4,
+        "elevation": [0.] * 4, "crs": [4326] * 4, "status": ["active"] * 4,
+        "station_type": ["COLD-POOL", None, "cold-pool", None],
+    })
+    database = InterpolationDB("sqlite:///:memory:")
+    try:
+        database.sync_catalog(_STATION_CATALOG_SCHEMA.validate(catalog))
+        for row in source_job.observations.itertuples():
+            database.add_station_data(row.station_id, pd.DataFrame({
+                "datetime": [start], "tair_2m": [row.tair_2m],
+            }))
+        stations = retrieve_stations(database, catalog.station_id.tolist(), ["tair_2m"], start, end)
+        job, = MeteoData.from_list(stations).build_jobs(start, end, "tair_2m")
+        result = process_interpolation_job(
+            job, interpolator,
+            CrossValidationConfig(enabled=True, param_grid={"lam_value": [0, 2]},
+                                  use_only_cold_pool=True),
+            _build_target_grid(source_job.observations, 4326), distances,
+        )
+        assert result.status == "completed", result.error
+        assert set(result.cv_result.fold_results.test_id) == {"a", "c"}
+        assert result.cv_result.get_best_parameters() == ({"lam_value": 2}, 0.)
+        assert set(result.prediction.station_ids) == {"a", "b", "c", "d"}
+    finally:
+        database.close()
+
+
+@pytest.mark.parametrize("eligible_count,n_splits,error", [
+    (0, None, "Got 0"),
+    (1, None, "Got 1"),
+    (3, 2, "3 samples are required"),
+])
+def test_worker_marks_invalid_cv_as_failed(eligible_count, n_splits, error, monkeypatch):
+    from unittest.mock import Mock
+    from src.worker import process_interpolation_job
+    interpolator, job, distances = _lambda_search_fixture()
+    job.observations["station_type"] = [
+        "cold-pool" if i < eligible_count else None for i in range(4)
+    ]
+    run = Mock()
+    monkeypatch.setattr(interpolator, "run", run)
+    result = process_interpolation_job(
+        job, interpolator,
+        CrossValidationConfig(enabled=True, param_grid={"lam_value": [0]},
+                              n_splits=n_splits, use_only_cold_pool=True),
+        _build_target_grid(job.observations, 4326), distances,
+    )
+    assert result.status == "failed"
+    assert error in result.error
+    assert result.prediction is None
+    run.assert_not_called()

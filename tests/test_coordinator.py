@@ -177,7 +177,7 @@ def test_load_cached_distance_fields_preserves_cache_miss(monkeypatch):
 
 def test_request_frequency_controls_jobs_without_changing_shared_state(monkeypatch, tmp_path):
     station = Station(
-        id="a", x=11.0, y=46.0, crs=4326, elevation=1000.0,
+        id="a", x=11.0, y=46.0, crs=4326, elevation=900.0,
         data=pd.DataFrame({
             "station_id": ["a"] * 24,
             "datetime": pd.date_range("2026-01-01", periods=24, freq="h", tz="UTC"),
@@ -212,6 +212,7 @@ def test_request_frequency_controls_jobs_without_changing_shared_state(monkeypat
             })
             prepared = coordinator._prepare_request(request)
             assert len(prepared.jobs) == count
+            assert prepared.jobs[0].observations["elevation"].tolist() == [900.0]
             assert prepared.jobs[0].observations["tair_2m"].tolist() == [first_value]
             xr.testing.assert_identical(prepared.prediction_target["elevation"], dem.data.rename("elevation"))
 

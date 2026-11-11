@@ -232,3 +232,45 @@ def test_runtime_closes_opened_resources_on_sync_failure(
     assert not runtime.initialized
     database.close.assert_called_once()
     close_dem.assert_called_once()
+
+
+@pytest.mark.parametrize("labels", [None, [None, None], ["COLD-POOL", None]])
+def test_catalog_accepts_missing_blank_and_normalized_classification(catalog_file, dem, labels):
+    path = catalog_file(None if labels is None else lambda df: df.assign(station_type=labels))
+    catalog = _load(path, dem)
+    if labels is None or labels[0] is None:
+        assert catalog.station_type.isna().all()
+    else:
+        assert catalog.station_type.iloc[0] == "cold-pool"
+        assert pd.isna(catalog.station_type.iloc[1])
+
+
+@pytest.mark.parametrize("enabled,labels,rejected", [
+    (False, [None, None], False),
+    (True, [None, "cold-pool"], True),
+    (True, ["cold-pool", None], False),
+])
+def test_runtime_cold_pool_check_uses_active_stations(
+    monkeypatch, tmp_path, catalog_file, dem, enabled, labels, rejected
+):
+    config = _config(catalog_file(lambda df: df.assign(station_type=labels)))
+    config["cross_validation"] = {
+        "enabled": enabled, "use_only_cold_pool": True, "param_grid": {"lam_value": [0]},
+    }
+    config["interpolation"]["residual_model"] = {"type": "inverse_distance_weighting", "neighbours": 1}
+    config["distance"] = {"type": "euclidean"}
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("src.runtime.load_dem", lambda **kwargs: dem)
+    monkeypatch.setattr("src.runtime.BaseDistanceCalculator.create",
+                        lambda *args, **kwargs: SimpleNamespace(load_cache=Mock(return_value=None)))
+    runtime = RuntimeContext(config=config)
+    try:
+        if rejected:
+            with pytest.raises(ValueError, match="no active stations"):
+                runtime.initialize_runtime(config)
+        else:
+            runtime.initialize_runtime(config)
+            assert runtime.initialized
+    finally:
+        if runtime.db is not None:
+            runtime.db.close()

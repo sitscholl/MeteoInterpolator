@@ -117,6 +117,9 @@ class InterpolationCoordinator:
             datetime_col="datetime",
             groupby_cols=["station_id"],
         )
+        # Keep authoritative station elevations; the DEM supplies prediction grid elevations.
+        ##Note: This may change predictions at the station location if elevation from the database
+        ##is different than the grid-cell elevation at the station location
         # meteo_data = meteo_data.update_elevation(self.context.dem, overwrite=True)
 
         jobs = list(meteo_data.build_jobs(request.start, request.end, request.param))

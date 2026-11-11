@@ -41,6 +41,7 @@ Current scope: the coordinator supports `tair_2m` interpolation at hourly or dai
 
 - Preserve timezone-aware timestamps through request and observation processing. Use existing helpers for UTC normalization and output serialization; retain the documented timezone meaning when storing timezone-naive array times.
 - Preserve station IDs as strings. Align observations, training arrays, and distance fields by IDs and named coordinates, not assumed row order. Training arrays use the `id` dimension.
+- Station elevations from the database/catalog are authoritative for training and station validation; request preparation does not overwrite them with DEM samples. Prediction grid elevations still come from the DEM.
 - Preserve CRS metadata and explicitly transform coordinates when needed. Keep station locations, DEM grids, prediction targets, and distance fields spatially consistent.
 - Keep validation at the existing data/model boundaries. Do not bypass finite-value, coordinate, dimension, or station-alignment checks to make an input pass.
 - Preserve the distinction between completed, skipped, and failed jobs. Insufficient observations currently produce a skipped job.

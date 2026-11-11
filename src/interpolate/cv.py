@@ -162,11 +162,15 @@ def cross_validate(
     ## Build cv-folds
     if use_only_cold_pool:
         cold_pool_obs = observations.loc[observations['station_type'] == 'cold-pool']
-        if cold_pool_obs.empty:
-            raise ValueError("No observations for cold-pool stations available")
         split_ids = cold_pool_obs['station_id'].unique()
     else:
         split_ids = observations['station_id'].unique()
+
+    if len(split_ids) < 2:
+        raise ValueError(
+            "Cross validation requires at least 2 eligible stations with observations. "
+            f"Got {len(split_ids)}."
+        )
 
     if config.n_splits is None:
         n_splits = len(split_ids)
@@ -176,6 +180,15 @@ def cross_validate(
         n_splits = min(config.n_splits, len(split_ids))
 
     cv_folds = list(KFold(n_splits).split(split_ids))
+
+    # Validate every training fold before fitting any candidate.
+    for i, (_, test_index) in enumerate(cv_folds):
+        n_training = len(observations) - len(test_index)
+        if n_training < estimator.min_sample_size:
+            raise ValueError(
+                f"{estimator.min_sample_size} samples are required for model fitting. "
+                f"Got {n_training} for fold {i}."
+            )
 
     ## Build cv-parameter-grid
     sorted_grid = {"lam_value": sorted(config.param_grid["lam_value"])}
@@ -189,7 +202,7 @@ def cross_validate(
         logger.debug("Testing parameter combination %s", param_combination)
 
         rows = []
-        for i, (train_index, test_index) in enumerate(cv_folds):
+        for i, (_, test_index) in enumerate(cv_folds):
             try:
                 test_ids = split_ids[test_index]
                 train_obs = observations.loc[~observations['station_id'].isin(test_ids)].copy() #use all stations except held out ones for training
@@ -199,9 +212,6 @@ def cross_validate(
                 observed_values = test_obs[job.parameter].values
                 test_ids = test_obs["station_id"].unique()
 
-                if len(train_obs) < estimator.min_sample_size:
-                    raise ValueError(f"{estimator.min_sample_size} samples are required for model fitting. Got {len(train_obs)} for fold {i}.")
-                
                 fold_job = InterpolationJob(
                             timestamp=to_utc_timestamp(job.timestamp, raise_missing_timezone = True),
                             parameter=job.parameter,

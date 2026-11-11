@@ -31,7 +31,7 @@ def test_list_catalog_station_preserves_metadata(station_client):
     client, database = station_client
     payload = {
         "id": "station-1", "latitude": 46.0, "longitude": 11.0,
-        "elevation": 300.0, "crs": 4326, "name": "Test station", "status": "active",
+        "elevation": 300.0, "crs": 4326, "name": "Test station", "status": "active", "station_type": "cold-pool",
     }
     database.add_station(**payload)
     response = client.get("/api/stations", params={"station_id": "station-1"})
