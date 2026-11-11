@@ -55,3 +55,4 @@ cross_validation:
   param_grid:
     lam_value: [0, 25, 50, 75, 100, 125, 150, 175, 200]
   select_by: rmse
+  use_only_cold_pool: true

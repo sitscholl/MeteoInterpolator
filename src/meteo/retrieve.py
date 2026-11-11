@@ -66,6 +66,7 @@ def retrieve_stations(
                 y = station_model.latitude,
                 elevation = station_model.elevation,
                 name = station_model.name,
+                station_type = station_model.station_type,
                 crs = station_model.crs,
                 data = station_data
             )

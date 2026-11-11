@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -61,6 +61,8 @@ class CrossValidationResult:
     n_splits: int
     search_stopped: bool
     selection_metric: str
+    cv_station_type: Literal['cold-pool', 'all']
+    evaluated_stations: int
 
     def __post_init__(self):
         required_cols = [*list(self.param_grid.keys()), 'observed', 'predicted', 'stalled']
@@ -131,6 +133,7 @@ def cross_validate(
     min_relative_score_improvement: float | None = None,
     improvement_latency_steps: int = 3,
     metric: str = 'rmse',
+    use_only_cold_pool: bool = False
 ):
 
     ##Validate cv options
@@ -141,6 +144,7 @@ def cross_validate(
         min_relative_score_improvement=min_relative_score_improvement,
         improvement_latency_steps=improvement_latency_steps,
         select_by=metric,
+        use_only_cold_pool=use_only_cold_pool,
     )
 
     if not isinstance(distance_fields, DistanceField):
@@ -150,19 +154,28 @@ def cross_validate(
 
     scoring_function = _SCORING_FUNCTIONS[config.select_by]
 
-    observations = job.observations.reset_index(drop=True)
-    # Use the same authoritative geometry as InterpolationJob.to_arrays().
+    observations = job.observations.reset_index(drop=True)    
     points = job.training_points.loc[observations["station_id"]]
     observations["x"] = points.geometry.x.to_numpy()
     observations["y"] = points.geometry.y.to_numpy()
+ 
+    ## Build cv-folds
+    if use_only_cold_pool:
+        cold_pool_obs = observations.loc[observations['station_type'] == 'cold-pool']
+        if cold_pool_obs.empty:
+            raise ValueError("No observations for cold-pool stations available")
+        split_ids = cold_pool_obs['station_id'].unique()
+    else:
+        split_ids = observations['station_id'].unique()
 
     if config.n_splits is None:
-        n_splits = len(observations)
+        n_splits = len(split_ids)
     else:
-        n_splits = config.n_splits
+        if config.n_splits > len(split_ids):
+            logger.warning(f"n_splits is larger than the available number of samples. Got {n_splits} vs {len(split_ids)}. Using sample numer as upper ceiling")
+        n_splits = min(config.n_splits, len(split_ids))
 
-    ## Build cv-folds
-    cv_folds = list(KFold(n_splits).split(observations))
+    cv_folds = list(KFold(n_splits).split(split_ids))
 
     ## Build cv-parameter-grid
     sorted_grid = {"lam_value": sorted(config.param_grid["lam_value"])}
@@ -178,8 +191,10 @@ def cross_validate(
         rows = []
         for i, (train_index, test_index) in enumerate(cv_folds):
             try:
-                train_obs = observations.iloc[train_index].copy()
-                test_obs = observations.iloc[test_index].copy()
+                test_ids = split_ids[test_index]
+                train_obs = observations.loc[~observations['station_id'].isin(test_ids)].copy() #use all stations except held out ones for training
+                test_obs = observations.loc[observations['station_id'].isin(test_ids)].copy()
+                
                 test_targets = _build_target_grid(test_obs, crs=job.training_points.crs)
                 observed_values = test_obs[job.parameter].values
                 test_ids = test_obs["station_id"].unique()
@@ -245,4 +260,6 @@ def cross_validate(
         n_splits = n_splits,
         search_stopped = search_stopped,
         selection_metric = config.select_by,
+        cv_station_type = 'cold-pool' if use_only_cold_pool else 'all',
+        evaluated_stations = len(split_ids),
     )

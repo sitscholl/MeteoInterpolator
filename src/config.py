@@ -112,6 +112,7 @@ class CrossValidationConfig(ConfigModel):
     min_relative_score_improvement: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     improvement_latency_steps: int = Field(default=3, ge=1, strict=True)
     select_by: Literal['rmse', 'mae'] = 'rmse'
+    use_only_cold_pool: bool = False
 
     @field_validator("select_by", mode='before')
     @classmethod

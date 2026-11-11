@@ -58,7 +58,8 @@ _STATION_CATALOG_SCHEMA = pa.DataFrameSchema(
         'longitude': pa.Column(float, coerce=True, nullable=False, checks=pa.Check(lambda x: np.isfinite(x))),
         'elevation': pa.Column(float, coerce=True, nullable=False, checks=pa.Check(lambda x: np.isfinite(x) & x.between(0, 5000))),
         'crs': pa.Column(int, nullable=False, checks=pa.Check.equal_to(4326)),
-        'status': pa.Column(str, nullable=False, coerce=True, parsers=pa.Parser(lambda x: x.str.lower()), checks=pa.Check.isin(allowed_values=['active', 'inactive']))
+        'status': pa.Column(str, nullable=False, coerce=True, parsers=pa.Parser(lambda x: x.str.lower()), checks=pa.Check.isin(allowed_values=['active', 'inactive'])),
+        'station_type': pa.Column(str, nullable=True, coerce=True, parsers=pa.Parser(lambda x: x.str.lower()), checks=pa.Check.isin(allowed_values=['cold-pool'], ignore_na=True)), 
     },
     strict = 'filter'
 )
@@ -66,7 +67,8 @@ _STATION_CATALOG_SCHEMA = pa.DataFrameSchema(
 _OBSERVATION_POINTS_SCHEMA = pg.GeoDataFrameSchema(
         {
             "geometry": pg.Column("geometry", nullable=False, required=True),
-            "elevation": pa.Column(float, nullable=True, required=False, coerce=True)
+            "elevation": pa.Column(float, nullable=True, required=False, coerce=True),
+            "station_type": pa.Column(str, nullable=True, coerce=True, parsers=pa.Parser(lambda x: x.str.lower()))
         },
         index = pa.Index(str, unique=True),
         strict = 'filter'

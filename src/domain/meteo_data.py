@@ -32,6 +32,10 @@ class MeteoData:
         if not self.observations.empty:
             self.observations = _STATION_DATA_SCHEMA.validate(self.observations)
         if not self.stations.empty:
+            if 'station_type' not in self.stations:
+                self.stations["station_type"] = pd.Series(
+                        pd.NA, index=self.stations.index, dtype="string"
+                    )
             self.stations = _OBSERVATION_POINTS_SCHEMA.validate(self.stations)
 
         stations_ids = pd.Index(self.stations.index.astype(str))
@@ -57,7 +61,7 @@ class MeteoData:
         stations = [st for st in lst if st.data is not None]
         if not stations:
             empty_stations = gpd.GeoDataFrame(
-                {"elevation": []},
+                {"elevation": [], "station_type": []},
                 geometry=[],
                 crs=4326,
             )
@@ -74,6 +78,7 @@ class MeteoData:
             {
                 'station_id': [i.id for i in stations],
                 'elevation': [i.elevation for i in stations],
+                'station_type': [i.station_type for i in stations],
             },
             crs = list(crs)[0],
             geometry = [Point(x, y) for x,y in coords]
@@ -185,7 +190,7 @@ class MeteoData:
         station_attrs["x"] = station_attrs.geometry.x.astype(float)
         station_attrs["y"] = station_attrs.geometry.y.astype(float)
         station_attrs = pd.DataFrame(station_attrs.drop(columns="geometry")).reset_index(drop=True)
-        station_attrs = station_attrs[["station_id", "elevation", "x", "y"]]
+        station_attrs = station_attrs[["station_id", "elevation", "x", "y", "station_type"]]
         observations = observations.merge(station_attrs, on="station_id", how="left", validate="many_to_one")
 
         for interp_date, subset in observations.groupby('datetime'):

@@ -51,6 +51,8 @@ class InterpolationJobResult:
                 'selection_metric': self.cv_result.selection_metric,
                 'cv_search_stopped': self.cv_result.search_stopped,
                 'selected_lam_value': self.prediction.lam_value,
+                'cv_station_type': self.cv_result.cv_station_type,
+                'evaluated_stations': self.cv_result.evaluated_stations,
                 'best_parameters': best_parameters,
                 'best_score': best_score
             }
@@ -120,7 +122,8 @@ def process_interpolation_job(
                 n_splits=cross_validation_config.n_splits,
                 min_relative_score_improvement=cross_validation_config.min_relative_score_improvement,
                 improvement_latency_steps=cross_validation_config.improvement_latency_steps,
-                metric=cross_validation_config.select_by
+                metric=cross_validation_config.select_by,
+                use_only_cold_pool=cross_validation_config.use_only_cold_pool,
             )
 
             best_params, best_score = cv_result.get_best_parameters()

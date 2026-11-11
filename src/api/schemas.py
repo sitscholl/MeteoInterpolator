@@ -42,6 +42,7 @@ class StationRead(BaseModel):
     crs: int
     status: Literal["active", "inactive"]
     name: str | None = None
+    station_type: str | None = None
 
 class DatabaseRefreshSubmission(BaseModel):
     submitted_at: datetime

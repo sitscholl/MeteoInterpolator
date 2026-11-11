@@ -33,6 +33,17 @@ _BATCH_SIZE = 5_000
 class StationAlreadyExistsError(ValueError):
     pass
 
+def _normalize_station_type(value):
+    if value is None or pd.isna(value):
+        return None
+    elif isinstance(value, str):
+        value = value.strip().lower() or None
+        if value not in (None, "cold-pool"):
+            raise ValueError(f"Invalid station_type: {value!r}")
+        return value
+    else:
+        raise TypeError("station_type must be a string or None")
+
 class InterpolationDB:
 
     def __init__(self, engine: str = 'sqlite:///db/database.db'):
@@ -62,9 +73,11 @@ class InterpolationDB:
 
     def get_stations(
         self, 
-        id: str | None = None, 
+        id: str | None = None,
         include_inactive: bool = False, 
-        db_session: Session | None = None
+        db_session: Session | None = None,
+        *,
+        station_type: str | None = None, 
         ) -> list[models.Station]:
 
         transaction = (
@@ -79,6 +92,8 @@ class InterpolationDB:
                 query = query.filter(models.Station.id == id)
             if not include_inactive:
                 query = query.filter(models.Station.status == 'active')
+            if station_type is not None:
+                query = query.filter(models.Station.station_type == station_type)
             return query.all()
 
     def get_data(
@@ -150,8 +165,10 @@ class InterpolationDB:
         elevation: float, 
         crs: int,
         status: str,
-        name: str | None = None, 
+        name: str | None = None,
         db_session: Session | None = None,
+        *,
+        station_type: str | None = None,
         ):
         if not isinstance(status, str):
             raise TypeError(f"Status must be of type string. Got {type(status)}")
@@ -164,6 +181,7 @@ class InterpolationDB:
             elevation,
         )
         crs = validate_crs(crs)
+        station_type = _normalize_station_type(station_type)
 
         transaction = (
             self.Session.begin()
@@ -177,7 +195,14 @@ class InterpolationDB:
                     f"Station with id {id} already exists"
                 )
             new_station = models.Station(
-                id = id, latitude = latitude, longitude = longitude, elevation = elevation, crs = crs, name = name, status = status
+                id = id, 
+                latitude = latitude, 
+                longitude = longitude, 
+                elevation = elevation, 
+                crs = crs, 
+                name = name, 
+                status = status,
+                station_type = station_type,
                 )
             session.add(new_station)
             session.flush()
@@ -205,14 +230,16 @@ class InterpolationDB:
                 raise ValueError(f"No station with id {id} for exists.")
             station = stations[0]
 
-            allowed_fields = {"name", "latitude", "longitude", "elevation", "crs", "status"}
+            allowed_fields = {"name", "latitude", "longitude", "elevation", "crs", "status", "station_type"}
             invalid_fields = {k: v for k, v in kwargs.items() if k not in allowed_fields}
             if len(invalid_fields) > 0:
                 raise ValueError(f"Invalid fields in update_station: {invalid_fields.keys()}. Allowed fields: {allowed_fields}")
 
             changed = False
             for key, value in kwargs.items():
-                if value is None:
+                if key == "station_type":
+                    value = _normalize_station_type(value)
+                elif value is None:
                     continue
                 if only_missing and getattr(station, key) is not None:
                     continue

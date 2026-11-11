@@ -36,9 +36,13 @@ def load_station_catalog(file: str | Path, aoi: AOI, crs: CRS | str | int):
     if not file.suffix == '.csv':
         raise ValueError(f"Cataloge file is not a csv file. Got {file}")
 
-    catalog = pd.read_csv(file, dtype={'station_id': str})
+    catalog = pd.read_csv(file, dtype={'station_id': str, 'station_type': str})
     if catalog.empty:
         raise ValueError("No active stations found in station catalogue.")
+    if 'station_type' not in catalog.columns:
+        catalog["station_type"] = pd.Series(
+                pd.NA, index=catalog.index, dtype="string"
+            )
     catalog = _STATION_CATALOG_SCHEMA.validate(catalog)
 
     n_active = sum(catalog['status'] == 'active')
@@ -181,6 +185,10 @@ class RuntimeContext:
                 self.meteo_data_config.station_catalog, aoi = self.aoi, crs = CRS.from_user_input(self.dem.crs)
             )
             self.active_stations = self.station_catalog.loc[self.station_catalog['status'] == 'active', 'station_id'].tolist()
+            if self.cross_validation.enabled and self.cross_validation.use_only_cold_pool:
+                active_cold_pool_stations = self.station_catalog.loc[(self.station_catalog['station_type'] == 'cold-pool') & (self.station_catalog['status'] == 'active')]
+                if active_cold_pool_stations.empty:
+                    raise ValueError("Cross validation use_only_cold_pool activated but no active stations with type cold-pool in catalog.")
             logger.info("Initialized %s stations inside dem for interpolation", len(self.active_stations))
 
             ## Distance fields

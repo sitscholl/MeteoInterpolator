@@ -13,6 +13,7 @@ class Station:
     crs: int
     elevation: float | None = None
     name: str | None = None
+    station_type: str | None = None
     data: pd.DataFrame | None = None
 
     def __post_init__(self):

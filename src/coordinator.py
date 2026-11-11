@@ -117,7 +117,7 @@ class InterpolationCoordinator:
             datetime_col="datetime",
             groupby_cols=["station_id"],
         )
-        meteo_data = meteo_data.update_elevation(self.context.dem, overwrite=True)
+        # meteo_data = meteo_data.update_elevation(self.context.dem, overwrite=True)
 
         jobs = list(meteo_data.build_jobs(request.start, request.end, request.param))
 

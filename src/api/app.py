@@ -138,7 +138,8 @@ def get_station_from_database(request: Request, station_id: str | None = None, s
             elevation=station.elevation,
             crs=station.crs,
             name=station.name,
-            status=station.status
+            status=station.status,
+            station_type = station.station_type,
         )
         for station in stations
     ]

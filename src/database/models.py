@@ -28,6 +28,7 @@ class Station(Base):
     elevation = Column(Float, nullable=False)
     crs = Column(Integer, nullable = False)
     status = Column(String, nullable = False)
+    station_type = Column(String, nullable=True)
 
     measurements = relationship("Measurement", back_populates="station")
     ingestion_requests = relationship("IngestionRequest", back_populates="station")
